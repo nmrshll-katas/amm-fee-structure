@@ -21,3 +21,8 @@ int_types = "long"
 multiline_func_header = "attributes_first"
 quote_style = "double"
 number_underscore = "thousands"
+
+auto_detect_remappings = true
+remappings = [
+    "forge-std/=lib/forge-std/src/"
+]
