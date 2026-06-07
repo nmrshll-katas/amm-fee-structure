@@ -11,14 +11,18 @@
       perSystem = { pkgs, ... }:
         let
           # Base dependencies for building & development
-          buildDeps = with pkgs; [
-            foundry
-            uv
-            maturin
-            rustc
-          ];
+          buildDeps = with pkgs; [ foundry uv maturin rustc ];
           # Additional tools for the interactive shell
           devDeps = [ ];
+
+          strategies = [
+            # "${bash.wd}/contracts/src/StarterStrategy.sol"
+            # "${bash.wd}/contracts/src/WidenAfterBigTrades.sol"
+            # "${bash.wd}/contracts/src/InventoryAware.sol"
+            "${bash.wd}/contracts/src/VolatilityStrat1.sol"
+            "${bash.wd}/VolatilityStrat1.sol"
+            "${bash.wd}/contracts/src/VolatilityStrat2.sol"
+          ];
 
           bash.wd = ''$(git rev-parse --show-toplevel 2>/dev/null || echo \".\")'';
           bin = mapAttrs (name: pkg: "${pkg}/bin/${name}") scripts;
@@ -28,7 +32,7 @@
             simbuild = '' cd amm_sim_rs ; maturin develop --release ; source "$VIRTUAL_ENV/bin/activate" '';
             simtest = ''
               simbuild ; source "$VIRTUAL_ENV/bin/activate"
-              amm-match run "${bash.wd}/contracts/src/StarterStrategy.sol" --simulations 10
+              ${concatStringsSep "\n" (map (s: "amm-match run ${s} --simulations 10") strategies)}
             '';
             snap = '' forge snapshot '';
             cov = '' forge coverage '';
@@ -38,7 +42,6 @@
               ${bin.fbuild}
               ${bin.utest}
               ${bin.snap}
-              echo "✅ All checks passed!"
             '';
 
             # Deploy to a local Anvil instance (assumes anvil is already running)
