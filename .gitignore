@@ -58,3 +58,8 @@ strategies/
 # Misc
 *.log
 .env
+
+
+# Added by cargo
+
+/target

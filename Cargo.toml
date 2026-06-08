@@ -1,0 +1,3 @@
+[workspace]
+members = ["optimizer", "amm_sim_rs"]
+resolver = "2"

@@ -1,0 +1,9 @@
+strategy_name,edge,params
+AutoGen_low_fee_fast_decay_0,289.32,"base_fee=20bps,widen=10bps,decay=1bps"
+AutoGen_low_fee_fast_decay_1,330.62,"base_fee=25bps,widen=10bps,decay=1bps"
+AutoGen_base_fee_fast_decay_2,352.25,"base_fee=30bps,widen=10bps,decay=1bps"
+AutoGen_mid_fee_fast_decay_3,360.9,"base_fee=35bps,widen=10bps,decay=1bps"
+AutoGen_mid_fee_fast_decay_4,368.41,"base_fee=40bps,widen=10bps,decay=1bps"
+AutoGen_base_fee_slow_decay_5,352.23,"base_fee=30bps,widen=10bps,decay=2bps"
+AutoGen_tight_widen_fast_decay_6,352.1,"base_fee=30bps,widen=5bps,decay=1bps"
+AutoGen_loose_widen_fast_decay_7,352.41,"base_fee=30bps,widen=15bps,decay=1bps"
