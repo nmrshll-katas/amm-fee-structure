@@ -1,100 +1,33 @@
 //! Automated strategy generation and backtesting loop using the `amm-match` CLI.
 //!
-//! Usage:
-//!     cargo run -- [--iterations N] [--simulations N] [--output results.csv]
-//!                [--base-fee-min 20] [--base-fee-max 40] [--base-fee-step 5]
-//!                [--widen-min 5] [--widen-max 15] [--widen-step 5]
-//!                [--decay-min 1] [--decay-max 2] [--decay-step 1]
+//! Usage:     cargo run -- [--iterations N] [--simulations N] [--output results.csv]
 
 use anyhow::{Context, Result, anyhow};
 use clap::Parser;
-use csv::WriterBuilder;
-use std::fs::{File, OpenOptions};
+use csv::ReaderBuilder;
+use std::collections::HashSet;
+use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Instant;
 
-// -----------------------------------------------------------------------------
-// Parameter definition and Solidity generation
-// -----------------------------------------------------------------------------
+use crate::strategies::boost_decay_2::{StrategyParams, generate_strategy_solidity, template_name};
 
-/// Strategy parameters (in basis points).
-#[derive(Debug, Clone)]
-pub struct StrategyParams {
-    pub base_fee_bps: u64,
-    pub widen_threshold_bps: u64,
-    pub decay_rate_bps: u64,
-    pub name_suffix: String,
-}
-
-/// Generate a Solidity source string from the given parameters.
-pub fn generate_strategy_solidity(params: &StrategyParams, strategy_name: &str) -> String {
-    format!(
-        r#"// SPDX-License-Identifier: MIT
-pragma solidity ^0.8.24;
-
-import {{AMMStrategyBase}} from "./AMMStrategyBase.sol";
-import {{TradeInfo}} from "./IAMMStrategy.sol";
-
-/// @title Auto-generated Strategy
-/// @notice Strategy variant: {suffix}
-contract Strategy is AMMStrategyBase {{
-    uint256 public constant BASE_FEE = {base_fee} * BPS;
-    uint256 public constant WIDEN_AMOUNT = {widen} * BPS;
-    uint256 public constant DECAY_AMOUNT = {decay} * BPS;
-    uint256 public constant WIDEN_THRESHOLD = WAD / 20; // 5% of reserves
-
-    function afterInitialize(
-        uint256,
-        uint256
-    ) external override returns (uint256, uint256) {{
-        slots[0] = BASE_FEE;
-        return (BASE_FEE, BASE_FEE);
-    }}
-
-    function afterSwap(
-        TradeInfo calldata trade
-    ) external override returns (uint256, uint256) {{
-        uint256 fee = slots[0];
-
-        // Check if trade was large relative to reserves
-        uint256 tradeRatio = wdiv(trade.amountY, trade.reserveY);
-        if (tradeRatio > WIDEN_THRESHOLD) {{
-            // Large trade: widen the spread
-            fee = clampFee(fee + WIDEN_AMOUNT);
-        }} else {{
-            // Decay back toward base fee
-            uint256 base = BASE_FEE;
-            if (fee > base) fee = fee - DECAY_AMOUNT;
-        }}
-
-        slots[0] = fee;
-        return (fee, fee);
-    }}
-
-    function getName() external pure override returns (string memory) {{
-        return "{strategy_name}";
-    }}
-}}
-"#,
-        suffix = params.name_suffix,
-        base_fee = params.base_fee_bps,
-        widen = params.widen_threshold_bps,
-        decay = params.decay_rate_bps,
-        strategy_name = strategy_name
-    )
+pub mod strategies {
+    pub mod boost_decay_2;
+    pub mod boost_decay_example;
 }
 
 // -----------------------------------------------------------------------------
 // Running a single strategy via `amm-match`
 // -----------------------------------------------------------------------------
 
-/// Result of a single strategy backtest.
+// Result of a single strategy backtest.
 #[derive(Debug)]
 pub struct StrategyResult {
-    pub strategy_name: String,
-    pub edge: f64,
+    pub template_name: String,
     pub params: String,
+    pub edge: f64,
 }
 
 /// Parse the output of `amm-match run`.
@@ -155,66 +88,57 @@ pub fn run_single_strategy(
     n_simulations: u64,
     sol_dir: &Path,
 ) -> Result<StrategyResult> {
-    // 1. Generate Solidity source
     let source_code = generate_strategy_solidity(params, strategy_name);
 
-    // 2. Write to a file
+    // Write solidity to a temp file
     let sol_path = sol_dir.join(format!("{}.sol", strategy_name));
     std::fs::write(&sol_path, &source_code)
         .with_context(|| format!("Failed to write Solidity file: {:?}", sol_path))?;
 
-    // 3. Call amm-match
+    // Run simulation, get edge
     let edge = run_amm_match(&sol_path, n_simulations)?;
 
     Ok(StrategyResult {
-        strategy_name: strategy_name.to_string(),
+        template_name: template_name().to_string(),
+        params: params.to_params_string(),
         edge,
-        params: format!(
-            "base_fee={}bps,widen={}bps,decay={}bps",
-            params.base_fee_bps, params.widen_threshold_bps, params.decay_rate_bps
-        ),
     })
 }
 
 // -----------------------------------------------------------------------------
-// Parameter grid generation
+// CSV helpers
 // -----------------------------------------------------------------------------
 
-/// Generate all combinations of parameters from the given ranges.
-fn generate_param_grid(
-    base_min: u64,
-    base_max: u64,
-    base_step: u64,
-    widen_min: u64,
-    widen_max: u64,
-    widen_step: u64,
-    decay_min: u64,
-    decay_max: u64,
-    decay_step: u64,
-) -> Vec<StrategyParams> {
-    let mut combos = Vec::new();
-    for base_fee in (base_min..=base_max).step_by(base_step as usize) {
-        for widen in (widen_min..=widen_max).step_by(widen_step as usize) {
-            for decay in (decay_min..=decay_max).step_by(decay_step as usize) {
-                let name_suffix = format!("b{}_w{}_d{}", base_fee, widen, decay);
-                combos.push(StrategyParams {
-                    base_fee_bps: base_fee,
-                    widen_threshold_bps: widen,
-                    decay_rate_bps: decay,
-                    name_suffix,
-                });
-            }
+/// Load existing parameter strings from the CSV file (if it exists).
+/// Returns a set of `params` strings that have already been tested.
+fn load_existing_params(output_path: &Path) -> Result<HashSet<String>> {
+    let mut set = HashSet::new();
+    if !output_path.exists() {
+        return Ok(set);
+    }
+
+    let file = File::open(output_path)?;
+    let mut rdr = ReaderBuilder::new().from_reader(file);
+    let headers = rdr.headers()?;
+    let params_idx = headers
+        .iter()
+        .position(|h| h == "params")
+        .ok_or_else(|| anyhow!("CSV missing 'params' column"))?;
+
+    for result in rdr.records() {
+        let record = result?;
+        if let Some(params) = record.get(params_idx) {
+            set.insert(params.to_string());
         }
     }
-    combos
+    Ok(set)
 }
-
-// -----------------------------------------------------------------------------
-// CSV append helper
-// -----------------------------------------------------------------------------
 
 /// Append a single result to the CSV file. Write header if file does not exist or is empty.
 fn append_result_to_csv(output_path: &Path, result: &StrategyResult) -> Result<()> {
+    use csv::WriterBuilder;
+    use std::fs::OpenOptions;
+
     let file_exists = output_path.exists();
     let file = OpenOptions::new()
         .create(true)
@@ -223,13 +147,13 @@ fn append_result_to_csv(output_path: &Path, result: &StrategyResult) -> Result<(
     let mut wtr = WriterBuilder::new().from_writer(file);
 
     if !file_exists || output_path.metadata()?.len() == 0 {
-        wtr.write_record(&["strategy_name", "edge", "params"])?;
+        wtr.write_record(["template_name", "params", "edge"])?;
     }
 
-    wtr.write_record(&[
-        &result.strategy_name,
-        &result.edge.to_string(),
+    wtr.write_record([
+        &result.template_name,
         &result.params,
+        &result.edge.to_string(),
     ])?;
     wtr.flush()?;
     Ok(())
@@ -239,91 +163,81 @@ fn append_result_to_csv(output_path: &Path, result: &StrategyResult) -> Result<(
 // CLI arguments and main
 // -----------------------------------------------------------------------------
 
-#[derive(Parser)]
-#[command(
-    author,
-    version,
-    about = "Run automated strategy generation and backtesting loop using amm-match"
-)]
-struct Args {
-    /// Number of strategy variations to test (default: all combos)
-    #[arg(long)]
-    iterations: Option<usize>,
-
-    /// Number of simulations per strategy
-    #[arg(long, default_value_t = 100)]
-    simulations: u64,
-
-    /// Output CSV file path
-    #[arg(long, default_value = "strategy_results.csv")]
-    output: PathBuf,
-
-    /// Directory to store generated Solidity files
-    #[arg(long, default_value = ".cache/generated_strategies")]
-    sol_dir: PathBuf,
-
-    // Parameter ranges for base fee (bps)
-    #[arg(long, default_value_t = 20)]
-    base_fee_min: u64,
-    #[arg(long, default_value_t = 40)]
-    base_fee_max: u64,
-    #[arg(long, default_value_t = 5)]
-    base_fee_step: u64,
-
-    // Parameter ranges for widen threshold (bps)
-    #[arg(long, default_value_t = 5)]
-    widen_min: u64,
-    #[arg(long, default_value_t = 15)]
-    widen_max: u64,
-    #[arg(long, default_value_t = 5)]
-    widen_step: u64,
-
-    // Parameter ranges for decay rate (bps)
-    #[arg(long, default_value_t = 1)]
-    decay_min: u64,
-    #[arg(long, default_value_t = 2)]
-    decay_max: u64,
-    #[arg(long, default_value_t = 1)]
-    decay_step: u64,
-}
-
 fn main() -> Result<()> {
+    #[derive(Parser)]
+    #[command(about = "Run automated strategy generation and backtesting loop using amm-match")]
+    struct Args {
+        /// Number of new strategy variations to test (default: all unseen combos)
+        #[arg(long)]
+        iterations: Option<usize>,
+
+        /// Number of simulations per strategy
+        #[arg(long, default_value_t = 100)]
+        simulations: u64,
+
+        /// Output CSV file path
+        #[arg(long, default_value = ".cache/strategy_results.csv")]
+        output: PathBuf,
+
+        /// Directory to store generated Solidity files
+        #[arg(long, default_value = ".cache/generated_strategies")]
+        sol_dir: PathBuf,
+    }
     let args = Args::parse();
 
     // Create the directory for Solidity files
     std::fs::create_dir_all(&args.sol_dir)?;
 
-    let all_params = generate_param_grid(
-        args.base_fee_min,
-        args.base_fee_max,
-        args.base_fee_step,
-        args.widen_min,
-        args.widen_max,
-        args.widen_step,
-        args.decay_min,
-        args.decay_max,
-        args.decay_step,
+    // Load already tested parameter combinations from existing CSV
+    let existing_params = load_existing_params(&args.output)?;
+    println!(
+        "Loaded {} previously tested combinations.",
+        existing_params.len()
     );
 
+    // Generate all possible parameter combinations
+    let all_params = strategies::boost_decay_2::StrategyParams::param_combinations();
     if all_params.is_empty() {
         anyhow::bail!("No parameter combinations generated (check min/max/step values)");
     }
 
-    let n_iter = args.iterations.unwrap_or(all_params.len());
-    let params_to_test = &all_params[..n_iter.min(all_params.len())];
+    // Filter out combinations that have already been tested
+    let mut unseen_params: Vec<StrategyParams> = Vec::new();
+    for params in all_params.iter() {
+        let params_str = params.to_params_string();
+        if !existing_params.contains(&params_str) {
+            unseen_params.push(params.clone());
+        }
+    }
 
-    for (i, params) in params_to_test.iter().enumerate() {
-        let strategy_name = format!("AutoGen_{}_{}", params.name_suffix, i);
+    println!(
+        "Found {} new parameter combinations out of {} total.",
+        unseen_params.len(),
+        all_params.len()
+    );
+
+    // Limit the number of new combinations to test if `--iterations` is provided
+    let to_test = match args.iterations {
+        Some(limit) if limit < unseen_params.len() => &unseen_params[..limit],
+        _ => &unseen_params[..],
+    };
+
+    if to_test.is_empty() {
+        println!("No new combinations to test. Exiting.");
+        return Ok(());
+    }
+
+    println!("Will run {} new strategies.\n", to_test.len());
+
+    for (i, params) in to_test.iter().enumerate() {
+        let strategy_name = format!("{}_{}_{}", template_name(), params.name_suffix(), i);
         println!(
             "[{}/{}] Running strategy: {}",
             i + 1,
-            params_to_test.len(),
+            to_test.len(),
             strategy_name
         );
-        println!(
-            "  Params: base_fee={}bps, widen={}bps, decay={}bps",
-            params.base_fee_bps, params.widen_threshold_bps, params.decay_rate_bps
-        );
+        println!("Params: {}", params.to_params_string());
 
         let start = Instant::now();
         match run_single_strategy(params, &strategy_name, args.simulations, &args.sol_dir) {
@@ -347,6 +261,5 @@ fn main() -> Result<()> {
         }
     }
 
-    println!("\nResults appended to: {:?}", args.output);
     Ok(())
 }
