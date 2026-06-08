@@ -17,6 +17,101 @@ pub mod strategies {
 }
 pub mod storage;
 
+#[tokio::main]
+async fn main() -> Result<()> {
+    #[derive(Parser)]
+    #[command(about = "Run automated strategy generation and backtesting loop using amm-match")]
+    struct Args {
+        /// Number of new strategy variations to test (default: all unseen combos)
+        #[arg(long)]
+        iterations: Option<usize>,
+
+        /// Number of simulations per strategy
+        #[arg(long, default_value_t = 10)]
+        simulations: u64,
+
+        /// Output CSV file path (kept for backward compatibility, but storage is preferred)
+        #[arg(long, default_value = ".cache/strategy_results.csv")]
+        output: PathBuf,
+
+        /// Directory to store generated Solidity files
+        #[arg(long, default_value = ".cache/generated_strategies")]
+        sol_dir: PathBuf,
+
+        /// Turso database URL (e.g., "turso://...", "turso::memory:", or file path)
+        #[arg(long, default_value = "turso:.cache/db.sqlite")]
+        database_url: String,
+    }
+    let args = Args::parse();
+
+    std::fs::create_dir_all(&args.sol_dir)?;
+    let mut storage = StrategyStorage::new(&args.database_url).await?;
+
+    pub enum LoopControl {
+        Next,
+        // Done,
+    }
+    async fn try_strategy_params<S: StrategyTemplate>(
+        strategy: &S,
+        storage: &mut StrategyStorage,
+        params: &S::Params,
+        args: &Args,
+    ) -> anyhow::Result<LoopControl> {
+        let template_name = strategy.template_name();
+        let params_str = params.to_params_string();
+
+        // Check if already processed
+        if storage.exists(template_name, &params_str).await? {
+            println!(
+                "Skipping already processed: {}_{}",
+                template_name, params_str
+            );
+            return Ok(LoopControl::Next);
+        }
+
+        let attempt_id = format!("{}_{}", template_name, params.name_suffix());
+        let start = Instant::now();
+        match strategy.run_with_params(params, args.simulations, &args.sol_dir) {
+            Ok(result) => {
+                let elapsed = start.elapsed();
+                println!("  Edge: {:.2} (in {:.2?})", result.edge, elapsed);
+                storage
+                    .store_result(&result)
+                    .await
+                    .context("Failed to store result in database")?;
+                Ok(LoopControl::Next)
+            }
+            Err(e) => Err(e.context(format!("Failed in strategy {}", attempt_id))),
+        }
+    }
+
+    let mut processed_count = 0;
+    let strategy = boost_decay_2::Strategy {};
+    loop {
+        let params = boost_decay_2::StrategyParams::sample_random();
+
+        // If iterations limit is reached, stop
+        if let Some(limit) = args.iterations
+            && processed_count >= limit
+        {
+            println!("Reached iteration limit ({}). Stopping.", limit);
+            break;
+        }
+
+        match try_strategy_params(&strategy, &mut storage, &params, &args).await {
+            Ok(LoopControl::Next) => processed_count += 1,
+            Err(e) => return Err(e),
+        }
+    }
+
+    // for params in strategy.params_iter() {
+    //     let params_str = params.to_params_string();
+    // }
+
+    println!("Done. Processed {} new strategies.", processed_count);
+    Ok(())
+}
+
 // -----------------------------------------------------------------------------
 // Running a single strategy via `amm-match`
 // -----------------------------------------------------------------------------
@@ -64,7 +159,7 @@ pub trait StrategyTemplate {
     }
 }
 pub trait IsParams: Clone {
-    fn from_str(s: &str) -> anyhow::Result<Self>;
+    fn sample_random() -> Self;
     fn to_params_string(&self) -> String;
     fn name_suffix(&self) -> String;
 }
@@ -124,94 +219,4 @@ fn parse_amm_output(stdout: &str) -> Result<f64> {
         }
     }
     Err(anyhow!("No 'Edge:' line found in:\n{}", stdout))
-}
-
-// -----------------------------------------------------------------------------
-// CLI arguments and main
-// -----------------------------------------------------------------------------
-
-#[tokio::main]
-async fn main() -> Result<()> {
-    #[derive(Parser)]
-    #[command(about = "Run automated strategy generation and backtesting loop using amm-match")]
-    struct Args {
-        /// Number of new strategy variations to test (default: all unseen combos)
-        #[arg(long)]
-        iterations: Option<usize>,
-
-        /// Number of simulations per strategy
-        #[arg(long, default_value_t = 10)]
-        simulations: u64,
-
-        /// Output CSV file path (kept for backward compatibility, but storage is preferred)
-        #[arg(long, default_value = ".cache/strategy_results.csv")]
-        output: PathBuf,
-
-        /// Directory to store generated Solidity files
-        #[arg(long, default_value = ".cache/generated_strategies")]
-        sol_dir: PathBuf,
-
-        /// Turso database URL (e.g., "turso://...", "turso::memory:", or file path)
-        #[arg(long, default_value = "turso:.cache/db.sqlite")]
-        database_url: String,
-    }
-    let args = Args::parse();
-
-    // Create the directory for Solidity files
-    std::fs::create_dir_all(&args.sol_dir)?;
-
-    // Initialize persistent storage
-    let mut storage = StrategyStorage::new(&args.database_url).await?;
-
-    let strategy = boost_decay_2::Strategy {};
-    let template_name = strategy.template_name();
-
-    // Limit the number of new combinations if `--iterations` is provided
-    let mut processed_count = 0;
-    for params in strategy.params_iter() {
-        let params_str = params.to_params_string();
-        // Check if already processed
-        if storage.exists(template_name, &params_str).await? {
-            println!(
-                "Skipping already processed: {}_{}",
-                template_name, params_str
-            );
-            continue;
-        }
-
-        // If iterations limit is reached, stop
-        if let Some(limit) = args.iterations
-            && processed_count >= limit
-        {
-            println!("Reached iteration limit ({}). Stopping.", limit);
-            break;
-        }
-
-        let attempt_id = format!("{}_{}", template_name, params.name_suffix());
-        let start = Instant::now();
-        match strategy.run_with_params(&params, args.simulations, &args.sol_dir) {
-            Ok(result) => {
-                let elapsed = start.elapsed();
-                println!("  Edge: {:.2} (in {:.2?})", result.edge, elapsed);
-                // Store in database
-                if let Err(e) = storage.store_result(&result).await {
-                    eprintln!("  WARNING: Failed to store result in database: {}", e);
-                } else {
-                    processed_count += 1;
-                }
-            }
-            Err(e) => {
-                eprintln!("  ERROR: {}", e);
-                if std::env::var("RUST_BACKTRACE").is_ok() {
-                    return Err(e.context(format!("Failed in strategy {}", attempt_id)));
-                } else {
-                    eprintln!("  ERROR: {}", e);
-                    continue; // next strategy
-                }
-            }
-        }
-    }
-
-    println!("Done. Processed {} new strategies.", processed_count);
-    Ok(())
 }

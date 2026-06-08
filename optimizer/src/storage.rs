@@ -5,6 +5,7 @@ use toasty::Db;
 
 /// Database representation of a strategy result.
 #[derive(toasty::Model)]
+#[table = "strategy_results"]
 pub struct StoredStrategyResult {
     #[key]
     #[auto]
