@@ -37,7 +37,8 @@
         bin = mapAttrs (name: pkg: "${pkg}/bin/${name}") scripts;
         scripts = mapAttrs pkgs.writeShellScriptBin {
           fbuild = '' forge build --contracts contracts'';
-          utest = '' forge test -vvv --contracts contracts'';
+          ftest = '' forge test -vvv --contracts contracts'';
+          otest = "cargo test -p optimizer ";
           simbuild = '' cd amm_sim_rs ; maturin develop --release ; source "$VIRTUAL_ENV/bin/activate" '';
           simtest = ''
             simbuild ; source "$VIRTUAL_ENV/bin/activate"
@@ -46,10 +47,10 @@
           snap = '' forge snapshot '';
           cov = '' forge coverage '';
           clean = '' forge clean '';
-          check = '' set -e
+          fcheck = '' set -e
               ${bin.clean}
               ${bin.fbuild}
-              ${bin.utest}
+              ${bin.ftest}
               ${bin.snap}
             '';
           optim = '' cargo run -p optimizer -- '';
