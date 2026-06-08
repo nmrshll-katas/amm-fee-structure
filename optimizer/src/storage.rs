@@ -103,6 +103,33 @@ impl StrategyStorage {
             .await?;
         Ok(count > 0)
     }
+
+    /// Return the `n` best (highest edge) results, optionally filtered by template name.
+    pub async fn best_n(
+        &mut self,
+        n: usize,
+        template_name: Option<&str>,
+    ) -> Result<Vec<crate::StrategyResult>> {
+        let mut query = StoredStrategyResult::all()
+            .order_by(StoredStrategyResult::fields().edge().desc())
+            .limit(n);
+        if let Some(name) = template_name {
+            query = query.filter(StoredStrategyResult::fields().template_name().eq(name));
+        }
+        let stored = query
+            .exec(&mut self.db)
+            .await
+            .context("Failed to load best results")?;
+        let results = stored
+            .into_iter()
+            .map(|s| crate::StrategyResult {
+                template_name: s.template_name,
+                params: s.params,
+                edge: s.edge,
+            })
+            .collect();
+        Ok(results)
+    }
 }
 
 #[cfg(test)]
@@ -218,5 +245,65 @@ mod tests {
         // Different template or params should be false.
         assert!(!storage.exists("boost_decay_2", "0.4_0.5").await.unwrap());
         assert!(!storage.exists("other", "0.1_0.2_0.3").await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_best_n() {
+        let mut storage = create_in_memory_storage().await;
+
+        let results = vec![
+            crate::StrategyResult {
+                template_name: "a".to_string(),
+                params: "p1".to_string(),
+                edge: 0.5,
+            },
+            crate::StrategyResult {
+                template_name: "a".to_string(),
+                params: "p2".to_string(),
+                edge: 0.9,
+            },
+            crate::StrategyResult {
+                template_name: "b".to_string(),
+                params: "p3".to_string(),
+                edge: 0.7,
+            },
+            crate::StrategyResult {
+                template_name: "a".to_string(),
+                params: "p4".to_string(),
+                edge: 0.2,
+            },
+            crate::StrategyResult {
+                template_name: "b".to_string(),
+                params: "p5".to_string(),
+                edge: 0.8,
+            },
+        ];
+
+        for r in &results {
+            storage.store_result(r).await.unwrap();
+        }
+
+        // Top 3 overall
+        let top3 = storage.best_n(3, None).await.unwrap();
+        assert_eq!(top3.len(), 3);
+        assert_eq!(top3[0].edge, 0.9);
+        assert_eq!(top3[1].edge, 0.8);
+        assert_eq!(top3[2].edge, 0.7);
+
+        // Top 2 for template "a"
+        let top2_a = storage.best_n(2, Some("a")).await.unwrap();
+        assert_eq!(top2_a.len(), 2);
+        assert_eq!(top2_a[0].edge, 0.9);
+        assert_eq!(top2_a[1].edge, 0.5);
+
+        // Request more than available
+        let all_b = storage.best_n(10, Some("b")).await.unwrap();
+        assert_eq!(all_b.len(), 2);
+        assert_eq!(all_b[0].edge, 0.8);
+        assert_eq!(all_b[1].edge, 0.7);
+
+        // Empty filter
+        let none = storage.best_n(5, Some("none")).await.unwrap();
+        assert!(none.is_empty());
     }
 }

@@ -31,6 +31,7 @@
           "${bash.wd}/VolatilityStrat1.sol"
           "${bash.wd}/contracts/src/VolatilityStrat2.sol"
           "${bash.wd}/contracts/src/BoostDecay.sol"
+          "${bash.wd}/contracts/src/Variance.sol"
         ];
 
         bash.wd = ''$(git rev-parse --show-toplevel 2>/dev/null || echo \".\")'';
@@ -38,7 +39,7 @@
         scripts = mapAttrs pkgs.writeShellScriptBin {
           fbuild = '' forge build --contracts contracts'';
           ftest = '' forge test -vvv --contracts contracts'';
-          otest = "cargo test -p optimizer ";
+          otest = "cargo test -p optimizer -- --nocapture";
           simbuild = '' cd amm_sim_rs ; maturin develop --release ; source "$VIRTUAL_ENV/bin/activate" '';
           simtest = ''
             simbuild ; source "$VIRTUAL_ENV/bin/activate"
@@ -58,6 +59,7 @@
             export UV_PROJECT_ENVIRONMENT="$VIRTUAL_ENV"
             uv run python -c "from amm_competition.cli import main; main()"
           '';
+          best = '' cargo test -p optimizer -- list_top_20 --no-capture'';
 
           # Deploy to a local Anvil instance (assumes anvil is already running)
           deploy-local = ''

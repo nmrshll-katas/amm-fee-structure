@@ -6,14 +6,17 @@ use anyhow::{Context, Result, anyhow};
 use clap::Parser;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::LazyLock;
 use std::time::Instant;
 
 use crate::storage::StrategyStorage;
-use crate::strategies::boost_decay_2;
+// use crate::strategies::boost_decay;
+use crate::strategies::from_file::TemplateFromFile;
 
 pub mod strategies {
-    pub mod boost_decay_2;
-    pub mod boost_decay_example;
+    pub mod boost_decay;
+    pub mod from_file;
+    pub mod widen_after_big_trades;
 }
 pub mod storage;
 
@@ -86,9 +89,12 @@ async fn main() -> Result<()> {
     }
 
     let mut processed_count = 0;
-    let strategy = boost_decay_2::Strategy {};
+    // let template = boost_decay::Template {};
+    let template = TemplateFromFile::parse_file(&REPO.join("contracts/src/Variance.sol"))
+        .context("Failed to parse boost_decay.sol")?;
+
     loop {
-        let params = boost_decay_2::StrategyParams::sample_random();
+        let params = template.random_params();
 
         // If iterations limit is reached, stop
         if let Some(limit) = args.iterations
@@ -98,7 +104,7 @@ async fn main() -> Result<()> {
             break;
         }
 
-        match try_strategy_params(&strategy, &mut storage, &params, &args).await {
+        match try_strategy_params(&template, &mut storage, &params, &args).await {
             Ok(LoopControl::Next) => processed_count += 1,
             Err(e) => return Err(e),
         }
@@ -117,11 +123,11 @@ async fn main() -> Result<()> {
 // -----------------------------------------------------------------------------
 
 /// A strategy template that can generate Solidity code from parameters.
-pub trait StrategyTemplate {
+pub trait StrategyTemplate: Sized {
     /// The type of parameters this template uses.
-    type Params: IsParams;
+    type Params: IsParams<Self>;
 
-    /// Unique name of the template (for CSV and identification).
+    /// Unique name of the template
     fn template_name(&self) -> &'static str;
 
     /// Generate the full Solidity source for a given parameter set and strategy name.
@@ -129,6 +135,9 @@ pub trait StrategyTemplate {
 
     /// Generate all possible parameter combinations defined for this template.
     fn params_iter(&self) -> Box<dyn Iterator<Item = Self::Params>>;
+
+    /// Generate a random set of parameters for this template.
+    fn random_params(&self) -> Self::Params;
 
     /// Run a single strategy: generate Solidity, call amm-match, and return results.
     fn run_with_params(
@@ -149,7 +158,13 @@ pub trait StrategyTemplate {
             .with_context(|| format!("Failed to write Solidity file: {:?}", sol_path))?;
 
         // Run simulation, get edge
-        let edge = run_amm_match(&sol_path, n_simulations)?;
+        let edge = match run_amm_match(&sol_path, n_simulations) {
+            Ok(edge) => edge,
+            Err(e) => {
+                dbg!(&sol_path);
+                return Err(e);
+            }
+        };
 
         Ok(StrategyResult {
             template_name: self.template_name().to_string(),
@@ -158,9 +173,15 @@ pub trait StrategyTemplate {
         })
     }
 }
-pub trait IsParams: Clone {
-    fn sample_random() -> Self;
+pub trait IsParams<Template> {
+    /// Generate a random instance of the parameters, using the template
+    /// to determine which constants (or other structure) need values.
+    fn sample_random(template: &Template) -> Self;
+
+    /// Convert the parameters to a human‑readable string (e.g., for logging).
     fn to_params_string(&self) -> String;
+
+    /// Return a short name suffix (e.g., derived from the first few bytes of a hash).
     fn name_suffix(&self) -> String;
 }
 
@@ -219,4 +240,43 @@ fn parse_amm_output(stdout: &str) -> Result<f64> {
         }
     }
     Err(anyhow!("No 'Edge:' line found in:\n{}", stdout))
+}
+
+pub static REPO: LazyLock<PathBuf> = LazyLock::new(|| {
+    let path_bytes = Command::new("git")
+        .arg("rev-parse")
+        .arg("--show-toplevel")
+        .output()
+        .unwrap()
+        .stdout;
+    let path_str = str::from_utf8(&path_bytes).unwrap().trim();
+    PathBuf::from(path_str)
+});
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    #[ignore = "utility test"]
+    async fn list_top_20() {
+        let mut storage =
+            StrategyStorage::new(&format!("turso:{}/.cache/db.sqlite", REPO.display()))
+                .await
+                .expect("Failed to open real database");
+
+        let top = storage.best_n(20, None).await.unwrap();
+        assert!(!top.is_empty(), "No results found in the database");
+
+        println!("Fetched {} best results:", top.len());
+        for (i, res) in top.iter().enumerate() {
+            println!(
+                "{}. {} {} -> {:.6}",
+                i + 1,
+                res.template_name,
+                res.params,
+                res.edge
+            );
+        }
+    }
 }

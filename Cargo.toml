@@ -1,3 +1,4 @@
 [workspace]
-members = ["optimizer", "amm_sim_rs"]
+members = ["optimizer"]
+exclude = ["amm_sim_rs"]
 resolver = "2"
