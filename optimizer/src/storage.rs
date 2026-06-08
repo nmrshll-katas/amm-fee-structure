@@ -3,10 +3,6 @@
 use anyhow::{Context, Result};
 use toasty::Db;
 
-// ------------------------------------------------------------
-// Database model (Toasty)
-// ------------------------------------------------------------
-
 /// Database representation of a strategy result.
 #[derive(toasty::Model)]
 pub struct StoredStrategyResult {
@@ -19,14 +15,7 @@ pub struct StoredStrategyResult {
     pub params: String,
     /// Edge value (profitability metric).
     pub edge: f64,
-    //
-    // Timestamp when the result was stored.
-    // pub created_at: toasty::time::OffsetDateTime,
 }
-
-// ------------------------------------------------------------
-// Public storage interface
-// ------------------------------------------------------------
 
 /// Storage for strategy results using Turso and Toasty.
 pub struct StrategyStorage {
@@ -42,28 +31,28 @@ impl StrategyStorage {
             .await
             .context("Failed to open Turso database")?;
         // Run migration(s)
-        db.push_schema().await?;
-
-        Ok(Self { db })
+        let mut storage = Self { db };
+        storage.migrate().await?;
+        Ok(storage)
     }
 
-    // /// Ensures the `stored_strategy_results` table exists.
-    // async fn init_schema(&self) -> Result<()> {
-    //     let sql = r#"
-    //           CREATE TABLE IF NOT EXISTS stored_strategy_results (
-    //               id INTEGER PRIMARY KEY AUTOINCREMENT,
-    //               template_name TEXT NOT NULL,
-    //               params TEXT NOT NULL,
-    //               edge REAL NOT NULL,
-    //               created_at TEXT NOT NULL
-    //           )
-    //       "#;
-    //     self.db
-    //         .exec(sql)
-    //         .await
-    //         .context("Failed to create strategy results table")?;
-    //     Ok(())
-    // }
+    /// Ensures the `strategy_results` table exists.
+    async fn migrate(&mut self) -> Result<()> {
+        toasty::sql::statement(
+            r#"
+              CREATE TABLE IF NOT EXISTS strategy_results (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                template_name TEXT NOT NULL,
+                params TEXT NOT NULL,
+                edge REAL NOT NULL
+              )
+            "#,
+        )
+        .exec(&mut self.db)
+        .await
+        .context("Failed to create strategy results table")?;
+        Ok(())
+    }
 
     /// Stores a single strategy result.
     pub async fn store_result(&mut self, result: &crate::StrategyResult) -> Result<()> {
@@ -71,7 +60,6 @@ impl StrategyStorage {
             .template_name(&result.template_name)
             .params(&result.params)
             .edge(result.edge)
-            // .created_at(toasty::time::OffsetDateTime::now_utc())
             .exec(&mut self.db)
             .await
             .context("Failed to insert strategy result")?;
