@@ -2,10 +2,14 @@
 //!
 //! Usage:
 //!     cargo run -- [--iterations N] [--simulations N] [--output results.csv]
+//!                [--base-fee-min 20] [--base-fee-max 40] [--base-fee-step 5]
+//!                [--widen-min 5] [--widen-max 15] [--widen-step 5]
+//!                [--decay-min 1] [--decay-max 2] [--decay-step 1]
 
 use anyhow::{Context, Result, anyhow};
 use clap::Parser;
-use csv::Writer;
+use csv::WriterBuilder;
+use std::fs::{File, OpenOptions};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Instant;
@@ -89,23 +93,15 @@ contract Strategy is AMMStrategyBase {{
 #[derive(Debug)]
 pub struct StrategyResult {
     pub strategy_name: String,
-    // pub avg_edge: f64,
     pub edge: f64,
-    // pub wins: u64,
-    // pub losses: u64,
-    // pub draws: u64,
-    // pub win_rate: f64,
     pub params: String,
 }
 
 /// Parse the output of `amm-match run`.
 fn parse_amm_output(stdout: &str) -> Result<f64> {
     for line in stdout.lines() {
-        // Find the exact "Edge:" token (not "Avg Edge:" etc.)
         if let Some(idx) = line.find("Edge:") {
-            // Start after "Edge:"
             let after = &line[idx + 5..];
-            // Find the first word/number in the remainder
             let number_str = after
                 .split_whitespace()
                 .next()
@@ -169,17 +165,10 @@ pub fn run_single_strategy(
 
     // 3. Call amm-match
     let edge = run_amm_match(&sol_path, n_simulations)?;
-    // let avg_edge = total_edge / n_simulations as f64;
-    // let win_rate = wins as f64 / n_simulations as f64;
 
     Ok(StrategyResult {
         strategy_name: strategy_name.to_string(),
-        // avg_edge,
         edge,
-        // wins,
-        // losses,
-        // draws,
-        // win_rate,
         params: format!(
             "base_fee={}bps,widen={}bps,decay={}bps",
             params.base_fee_bps, params.widen_threshold_bps, params.decay_rate_bps
@@ -188,62 +177,67 @@ pub fn run_single_strategy(
 }
 
 // -----------------------------------------------------------------------------
-// Main loop and CSV output
+// Parameter grid generation
 // -----------------------------------------------------------------------------
 
-/// Define the parameter grid (same as the Python example).
-fn param_grid() -> Vec<StrategyParams> {
-    vec![
-        StrategyParams {
-            base_fee_bps: 20,
-            widen_threshold_bps: 10,
-            decay_rate_bps: 1,
-            name_suffix: "low_fee_fast_decay".to_string(),
-        },
-        StrategyParams {
-            base_fee_bps: 25,
-            widen_threshold_bps: 10,
-            decay_rate_bps: 1,
-            name_suffix: "low_fee_fast_decay".to_string(),
-        },
-        StrategyParams {
-            base_fee_bps: 30,
-            widen_threshold_bps: 10,
-            decay_rate_bps: 1,
-            name_suffix: "base_fee_fast_decay".to_string(),
-        },
-        StrategyParams {
-            base_fee_bps: 35,
-            widen_threshold_bps: 10,
-            decay_rate_bps: 1,
-            name_suffix: "mid_fee_fast_decay".to_string(),
-        },
-        StrategyParams {
-            base_fee_bps: 40,
-            widen_threshold_bps: 10,
-            decay_rate_bps: 1,
-            name_suffix: "mid_fee_fast_decay".to_string(),
-        },
-        StrategyParams {
-            base_fee_bps: 30,
-            widen_threshold_bps: 10,
-            decay_rate_bps: 2,
-            name_suffix: "base_fee_slow_decay".to_string(),
-        },
-        StrategyParams {
-            base_fee_bps: 30,
-            widen_threshold_bps: 5,
-            decay_rate_bps: 1,
-            name_suffix: "tight_widen_fast_decay".to_string(),
-        },
-        StrategyParams {
-            base_fee_bps: 30,
-            widen_threshold_bps: 15,
-            decay_rate_bps: 1,
-            name_suffix: "loose_widen_fast_decay".to_string(),
-        },
-    ]
+/// Generate all combinations of parameters from the given ranges.
+fn generate_param_grid(
+    base_min: u64,
+    base_max: u64,
+    base_step: u64,
+    widen_min: u64,
+    widen_max: u64,
+    widen_step: u64,
+    decay_min: u64,
+    decay_max: u64,
+    decay_step: u64,
+) -> Vec<StrategyParams> {
+    let mut combos = Vec::new();
+    for base_fee in (base_min..=base_max).step_by(base_step as usize) {
+        for widen in (widen_min..=widen_max).step_by(widen_step as usize) {
+            for decay in (decay_min..=decay_max).step_by(decay_step as usize) {
+                let name_suffix = format!("b{}_w{}_d{}", base_fee, widen, decay);
+                combos.push(StrategyParams {
+                    base_fee_bps: base_fee,
+                    widen_threshold_bps: widen,
+                    decay_rate_bps: decay,
+                    name_suffix,
+                });
+            }
+        }
+    }
+    combos
 }
+
+// -----------------------------------------------------------------------------
+// CSV append helper
+// -----------------------------------------------------------------------------
+
+/// Append a single result to the CSV file. Write header if file does not exist or is empty.
+fn append_result_to_csv(output_path: &Path, result: &StrategyResult) -> Result<()> {
+    let file_exists = output_path.exists();
+    let file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(output_path)?;
+    let mut wtr = WriterBuilder::new().from_writer(file);
+
+    if !file_exists || output_path.metadata()?.len() == 0 {
+        wtr.write_record(&["strategy_name", "edge", "params"])?;
+    }
+
+    wtr.write_record(&[
+        &result.strategy_name,
+        &result.edge.to_string(),
+        &result.params,
+    ])?;
+    wtr.flush()?;
+    Ok(())
+}
+
+// -----------------------------------------------------------------------------
+// CLI arguments and main
+// -----------------------------------------------------------------------------
 
 #[derive(Parser)]
 #[command(
@@ -252,7 +246,7 @@ fn param_grid() -> Vec<StrategyParams> {
     about = "Run automated strategy generation and backtesting loop using amm-match"
 )]
 struct Args {
-    /// Number of strategy variations to test (default: all)
+    /// Number of strategy variations to test (default: all combos)
     #[arg(long)]
     iterations: Option<usize>,
 
@@ -267,6 +261,30 @@ struct Args {
     /// Directory to store generated Solidity files
     #[arg(long, default_value = ".cache/generated_strategies")]
     sol_dir: PathBuf,
+
+    // Parameter ranges for base fee (bps)
+    #[arg(long, default_value_t = 20)]
+    base_fee_min: u64,
+    #[arg(long, default_value_t = 40)]
+    base_fee_max: u64,
+    #[arg(long, default_value_t = 5)]
+    base_fee_step: u64,
+
+    // Parameter ranges for widen threshold (bps)
+    #[arg(long, default_value_t = 5)]
+    widen_min: u64,
+    #[arg(long, default_value_t = 15)]
+    widen_max: u64,
+    #[arg(long, default_value_t = 5)]
+    widen_step: u64,
+
+    // Parameter ranges for decay rate (bps)
+    #[arg(long, default_value_t = 1)]
+    decay_min: u64,
+    #[arg(long, default_value_t = 2)]
+    decay_max: u64,
+    #[arg(long, default_value_t = 1)]
+    decay_step: u64,
 }
 
 fn main() -> Result<()> {
@@ -275,11 +293,24 @@ fn main() -> Result<()> {
     // Create the directory for Solidity files
     std::fs::create_dir_all(&args.sol_dir)?;
 
-    let all_params = param_grid();
+    let all_params = generate_param_grid(
+        args.base_fee_min,
+        args.base_fee_max,
+        args.base_fee_step,
+        args.widen_min,
+        args.widen_max,
+        args.widen_step,
+        args.decay_min,
+        args.decay_max,
+        args.decay_step,
+    );
+
+    if all_params.is_empty() {
+        anyhow::bail!("No parameter combinations generated (check min/max/step values)");
+    }
+
     let n_iter = args.iterations.unwrap_or(all_params.len());
     let params_to_test = &all_params[..n_iter.min(all_params.len())];
-
-    let mut results = Vec::new();
 
     for (i, params) in params_to_test.iter().enumerate() {
         let strategy_name = format!("AutoGen_{}_{}", params.name_suffix, i);
@@ -298,13 +329,11 @@ fn main() -> Result<()> {
         match run_single_strategy(params, &strategy_name, args.simulations, &args.sol_dir) {
             Ok(result) => {
                 let elapsed = start.elapsed();
-                println!(
-                    "  Edge: {:.2}",
-                    result.edge,
-                    // result.win_rate * 100.0,
-                    // elapsed
-                );
-                results.push(result);
+                println!("  Edge: {:.2} (in {:.2?})", result.edge, elapsed);
+                // Append result to CSV immediately
+                if let Err(e) = append_result_to_csv(&args.output, &result) {
+                    eprintln!("  WARNING: Failed to append to CSV: {}", e);
+                }
             }
             Err(e) => {
                 eprintln!("  ERROR: {}", e);
@@ -318,45 +347,6 @@ fn main() -> Result<()> {
         }
     }
 
-    // Write results to CSV
-    let mut wtr = Writer::from_path(&args.output)?;
-    wtr.write_record(&[
-        "strategy_name",
-        // "avg_edge",
-        "edge",
-        // "wins",
-        // "losses",
-        // "draws",
-        // "win_rate",
-        "params",
-    ])?;
-
-    for res in &results {
-        wtr.write_record(&[
-            &res.strategy_name,
-            &res.edge.to_string(),
-            // &res.total_edge.to_string(),
-            // &res.wins.to_string(),
-            // &res.losses.to_string(),
-            // &res.draws.to_string(),
-            // &res.win_rate.to_string(),
-            &res.params,
-        ])?;
-    }
-    wtr.flush()?;
-
-    println!("\nResults saved to: {:?}", args.output);
-
-    // if !results.is_empty() {
-    //     let best = results
-    //         .iter()
-    //         .max_by(|a, b| a.avg_edge.partial_cmp(&b.avg_edge).unwrap())
-    //         .unwrap();
-    //     println!(
-    //         "Best strategy: {} with avg edge {:.2}",
-    //         best.strategy_name, best.avg_edge
-    //     );
-    // }
-
+    println!("\nResults appended to: {:?}", args.output);
     Ok(())
 }
