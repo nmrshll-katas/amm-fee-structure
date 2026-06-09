@@ -272,7 +272,7 @@ mod tests {
                 .await
                 .expect("Failed to open real database");
 
-        let top = storage.best_n::<serde_json::Value>(20, None).await.unwrap();
+        let top = storage.best_n(20, None).await.unwrap();
         assert!(!top.is_empty(), "No results found in the database");
 
         println!("Fetched {} best results:", top.len());

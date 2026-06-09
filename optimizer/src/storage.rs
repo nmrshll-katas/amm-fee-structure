@@ -1,7 +1,7 @@
 //! Turso + Toasty storage for strategy results.
 
 use anyhow::{Context, Result};
-use serde::{Serialize, de::DeserializeOwned};
+use serde::Serialize;
 use toasty::Db;
 
 use crate::StrategyResult;
@@ -58,7 +58,7 @@ impl StrategyStorage {
         Ok(())
     }
 
-    /// Store a result for a given template. `P` must be serializable to JSON.
+    /// Store a result for a given template.
     pub async fn store_result<P: Serialize>(&mut self, result: &StrategyResult<P>) -> Result<()> {
         let params_json = serde_json::to_string(&result.params)
             .context("Failed to serialize parameters to JSON")?;
@@ -72,12 +72,11 @@ impl StrategyStorage {
         Ok(())
     }
 
-    /// Load all results for a specific template, deserializing the parameters into `P`.
-    /// All rows for this template must have the same parameter type `P`.
-    pub async fn load_results<P: DeserializeOwned>(
+    /// Load all results for a specific template. Don't deserialize params.
+    pub async fn load_results(
         &mut self,
         template_name: Option<&str>,
-    ) -> Result<Vec<StrategyResult<P>>> {
+    ) -> Result<Vec<StoredStrategyResult>> {
         let mut query = StoredStrategyResult::all();
         if let Some(name) = template_name {
             query = query.filter(StoredStrategyResult::fields().template_name().eq(name));
@@ -86,30 +85,7 @@ impl StrategyStorage {
             .exec(&mut self.db)
             .await
             .context("Failed to load strategy results")?;
-
-        // let results = stored
-        //     .into_iter()
-        //     .map(|s| crate::StrategyResult {
-        //         template_name: s.template_name,
-        //         params: s.params,
-        //         edge: s.edge,
-        //     })
-        //     .collect();
-        let mut results = Vec::new();
-        for s in stored {
-            let params: P = serde_json::from_str(&s.params).with_context(|| {
-                format!(
-                    "Failed to deserialize params for template '{:?}'",
-                    template_name
-                )
-            })?;
-            results.push(StrategyResult {
-                template_name: s.template_name,
-                params,
-                edge: s.edge,
-            });
-        }
-        Ok(results)
+        Ok(stored)
     }
 
     /// Check if a specific parameter combination already exists for a template.
@@ -130,11 +106,11 @@ impl StrategyStorage {
     }
 
     /// Return the `n` best results for a template (highest edge), deserialized into `P`.
-    pub async fn best_n<P: DeserializeOwned>(
+    pub async fn best_n(
         &mut self,
         n: usize,
         template_name: Option<&str>,
-    ) -> Result<Vec<crate::StrategyResult<P>>> {
+    ) -> Result<Vec<StoredStrategyResult>> {
         let mut query = StoredStrategyResult::all()
             .order_by(StoredStrategyResult::fields().edge().desc())
             .limit(n);
@@ -148,17 +124,13 @@ impl StrategyStorage {
 
         let mut results = Vec::new();
         for s in stored {
-            let params: P = serde_json::from_str(&s.params).with_context(|| {
-                format!(
-                    "Failed to deserialize params for template '{:?}'",
-                    template_name
-                )
-            })?;
-            results.push(StrategyResult {
-                template_name: s.template_name,
-                params,
-                edge: s.edge,
-            });
+            // let params: P = serde_json::from_str(&s.params).with_context(|| {
+            //     format!(
+            //         "Failed to deserialize params for template '{:?}'",
+            //         template_name
+            //     )
+            // })?;
+            results.push(s);
         }
         Ok(results)
     }
@@ -193,25 +165,29 @@ mod tests {
         storage.store_result(&result1).await.unwrap();
         storage.store_result(&result2).await.unwrap();
 
-        let all = storage.load_results::<String>(None).await.unwrap();
+        let all = storage.load_results(None).await.unwrap();
         assert_eq!(all.len(), 2);
+
+        let expected_params1 = serde_json::to_string(&result1.params).unwrap();
+        let expected_params2 = serde_json::to_string(&result2.params).unwrap();
+
         // Order is not guaranteed, so check both exist.
         let first = &all[0];
         let second = &all[1];
         assert!(
             (first.template_name == result1.template_name
-                && first.params == result1.params
+                && first.params == expected_params1
                 && first.edge == result1.edge)
                 || (first.template_name == result2.template_name
-                    && first.params == result2.params
+                    && first.params == expected_params2
                     && first.edge == result2.edge)
         );
         assert!(
             (second.template_name == result1.template_name
-                && second.params == result1.params
+                && second.params == expected_params1
                 && second.edge == result1.edge)
                 || (second.template_name == result2.template_name
-                    && second.params == result2.params
+                    && second.params == expected_params2
                     && second.edge == result2.edge)
         );
     }
@@ -240,19 +216,13 @@ mod tests {
         storage.store_result(&result2).await.unwrap();
         storage.store_result(&result3).await.unwrap();
 
-        let filtered = storage
-            .load_results::<String>(Some("boost_decay_2"))
-            .await
-            .unwrap();
+        let filtered = storage.load_results(Some("boost_decay_2")).await.unwrap();
         assert_eq!(filtered.len(), 2);
         for res in filtered {
             assert_eq!(res.template_name, "boost_decay_2");
         }
 
-        let empty = storage
-            .load_results::<String>(Some("nonexistent"))
-            .await
-            .unwrap();
+        let empty = storage.load_results(Some("nonexistent")).await.unwrap();
         assert!(empty.is_empty());
     }
 
@@ -322,35 +292,26 @@ mod tests {
         }
 
         // Top 3 overall
-        let top3 = storage.best_n::<serde_json::Value>(3, None).await.unwrap();
+        let top3 = storage.best_n(3, None).await.unwrap();
         assert_eq!(top3.len(), 3);
         assert_eq!(top3[0].edge, 0.9);
         assert_eq!(top3[1].edge, 0.8);
         assert_eq!(top3[2].edge, 0.7);
 
         // Top 2 for template "a"
-        let top2_a = storage
-            .best_n::<serde_json::Value>(2, Some("a"))
-            .await
-            .unwrap();
+        let top2_a = storage.best_n(2, Some("a")).await.unwrap();
         assert_eq!(top2_a.len(), 2);
         assert_eq!(top2_a[0].edge, 0.9);
         assert_eq!(top2_a[1].edge, 0.5);
 
         // Request more than available
-        let all_b = storage
-            .best_n::<serde_json::Value>(10, Some("b"))
-            .await
-            .unwrap();
+        let all_b = storage.best_n(10, Some("b")).await.unwrap();
         assert_eq!(all_b.len(), 2);
         assert_eq!(all_b[0].edge, 0.8);
         assert_eq!(all_b[1].edge, 0.7);
 
         // Empty filter
-        let none = storage
-            .best_n::<serde_json::Value>(5, Some("none"))
-            .await
-            .unwrap();
+        let none = storage.best_n(5, Some("none")).await.unwrap();
         assert!(none.is_empty());
     }
 }
