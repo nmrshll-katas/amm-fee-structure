@@ -4,7 +4,6 @@ use rand::{RngExt, rngs::ThreadRng, seq::IndexedRandom};
 use regex::Regex;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::{
-    boxed::Box,
     collections::HashMap,
     fs,
     iter::Iterator,
@@ -340,35 +339,17 @@ impl StepRange {
         if current < self.min || current > self.max {
             return current;
         }
-        let step_doubled = match self.step.checked_mul(U256::from(2)) {
-            Some(val) => val,
-            None => return current,
-        };
 
-        let random_val = random_u256(&mut rng) % step_doubled;
-
-        // let variation = if random_val < self.step {
-        //     self.step.checked_sub(random_val).unwrap_or(self.step)
-        // } else {
-        //     random_val.checked_sub(self.step).unwrap_or(U256::zero())
-        // };
-        // dbg!(&variation);
-        // dbg!(&self);
-
-        // Apply variation with proper signed arithmetic
-        let new_value = if random_val < self.step {
-            current
-                .checked_sub(self.step - random_val)
-                .unwrap_or(self.min)
+        let delta = random_u256(&mut rng) % (self.step.saturating_add(U256::from(1)));
+        let new = if rng.random_bool(0.5) {
+            current.saturating_add(delta)
         } else {
-            current
-                .checked_add(random_val - self.step)
-                .unwrap_or(self.max)
-        };
-        dbg!(&new_value);
+            current.saturating_sub(delta)
+        }
+        .clamp(self.min, self.max);
 
-        // Clamp to range
-        new_value.clamp(self.min, self.max)
+        dbg!(&new, self.min, self.max);
+        new
     }
 }
 

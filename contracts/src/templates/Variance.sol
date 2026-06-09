@@ -9,7 +9,7 @@ import {IAMMStrategy, TradeInfo} from "../IAMMStrategy.sol";
 /// @dev This runs as the second AMM in simulations to normalize scoring
 contract Strategy is AMMStrategyBase {
     /// @notice Smoothing factor for EWMA (10% = 1e17). Must be in WAD.
-    uint256 internal constant ALPHA = WAD / 10; // 0.1  range(1e16-1e17 by 1e16)
+    uint256 internal constant ALPHA = WAD / 10; // 0.1  range(1e16-5e17 by 1e16)
 
     /// @notice Scaling factor from volatility (WAD) to fee increment (WAD)
     /// @dev e.g., 10% volatility adds 1% fee: (0.1 * 0.1) = 0.01 = 1e16

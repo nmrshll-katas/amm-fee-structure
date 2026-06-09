@@ -5,7 +5,6 @@
 use anyhow::{Context, Result, anyhow};
 use clap::Parser;
 use rand::seq::IndexedRandom;
-use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::LazyLock;
@@ -56,7 +55,7 @@ async fn main() -> anyhow::Result<()> {
         REPO.join("contracts/src/templates/BoostDecay.sol"),
         // REPO.join("contracts/src/templates/StaticFee.sol"),
         REPO.join("contracts/src/templates/Variance.sol"),
-        REPO.join("contracts/src/templates/Volatility.sol"),
+        // REPO.join("contracts/src/templates/Volatility.sol"),
         REPO.join("contracts/src/templates/Volatility2.sol"),
         REPO.join("contracts/src/templates/WidenAfterBigTrades.sol"),
     ];
@@ -124,12 +123,14 @@ impl TemplateFromFile {
                 template_name,
                 params.name_suffix()
             );
-            let mut loaded_params = already_processed.parse_into::<SolidityFileParams>()?;
-            // for param in loaded_params.params_iter() {
-            // TODO NEXT
-            // }
-            // return loaded_params.parse_into::<SolidityFileParams>();
-            return Ok(loaded_params);
+            let mut loaded_results = already_processed.parse_into::<SolidityFileParams>()?;
+            for (key, loaded_val) in loaded_results.params.values.iter_mut() {
+                // copy range into loaded_params
+                if let Some(constant) = self.constants.get(key) {
+                    loaded_val.range = constant.range.clone();
+                }
+            }
+            return Ok(loaded_results);
         }
 
         let attempt_id = format!("{}_{}", template_name, params.name_suffix());
@@ -137,7 +138,13 @@ impl TemplateFromFile {
         match self.run_with_params(params, args.simulations, &args.sol_dir) {
             Ok(result) => {
                 let elapsed = start.elapsed();
-                println!("  Edge: {:.2} (in {:.2?})", result.edge, elapsed);
+                println!(
+                    "Trying {} with params {}:  Edge: {:.2} (in {:.2?})",
+                    self.template_name(),
+                    params,
+                    result.edge,
+                    elapsed
+                );
                 storage
                     .store_result(&result)
                     .await
@@ -254,25 +261,25 @@ async fn refine_strategies_params(
     for template in templates {
         let top10: Vec<StoredStrategyResult> =
             storage.best_n(10, Some(&template.template_name())).await?;
-        let mut parsed = Vec::<StrategyResult>::new();
+        let mut parsed_top10 = Vec::<StrategyResult>::new();
         for result in top10 {
-            parsed.push(result.parse_into::<SolidityFileParams>()?);
+            parsed_top10.push(result.parse_into::<SolidityFileParams>()?);
         }
 
-        for result in &parsed {
-            if result.edge < 390.0 {
+        for top10_result in &parsed_top10 {
+            dbg!(&top10_result.params.to_string());
+            if top10_result.edge < 390.0 {
                 continue;
             }
-            let mut current_result: StrategyResult = result.clone();
+            let mut current_result: StrategyResult = top10_result.clone();
             for _ in 0..1000 {
-                dbg!(&current_result.params);
                 let new_result = template
                     .run_dedup(storage, &current_result.params.vary_one()?, args)
                     .await?;
-                dbg!(&new_result.params);
                 if new_result.edge >= current_result.edge {
                     current_result = new_result;
                 }
+                // dbg!(&current_result.params);
             }
         }
     }
