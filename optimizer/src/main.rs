@@ -54,7 +54,7 @@ async fn main() -> anyhow::Result<()> {
 
     let template_paths = vec![
         REPO.join("contracts/src/templates/BoostDecay.sol"),
-        REPO.join("contracts/src/templates/StaticFee.sol"),
+        // REPO.join("contracts/src/templates/StaticFee.sol"),
         REPO.join("contracts/src/templates/Variance.sol"),
         REPO.join("contracts/src/templates/Volatility.sol"),
         REPO.join("contracts/src/templates/Volatility2.sol"),
@@ -68,7 +68,7 @@ async fn main() -> anyhow::Result<()> {
 
     // let template = boost_decay::Template {};
 
-    refine_strategies_params(&templates, &mut storage).await?;
+    refine_strategies_params(&templates, &mut storage, &args).await?;
     exec_random_strategy_params(&templates, &mut storage, &args).await?;
 
     Ok(())
@@ -86,7 +86,7 @@ async fn main() -> anyhow::Result<()> {
 /// A strategy template that can generate Solidity code from parameters.
 pub trait StrategyTemplate: Sized {
     /// The type of parameters this template uses.
-    type Params: IsParams<Self>;
+    type Params: IsParams<Self> + std::fmt::Display;
 
     /// Unique name of the template
     fn template_name(&self) -> String;
@@ -110,11 +110,7 @@ pub trait StrategyTemplate: Sized {
         let source_code = self.generate_solidity(params);
 
         // Write solidity to a temp file
-        let sol_path = sol_dir.join(format!(
-            "{}_{}.sol",
-            self.template_name(),
-            params.to_params_string()
-        ));
+        let sol_path = sol_dir.join(format!("{}_{}.sol", self.template_name(), params.id()));
         std::fs::write(&sol_path, &source_code)
             .with_context(|| format!("Failed to write Solidity file: {:?}", sol_path))?;
 
@@ -122,7 +118,6 @@ pub trait StrategyTemplate: Sized {
         let edge = match run_amm_match(&sol_path, n_simulations) {
             Ok(edge) => edge,
             Err(e) => {
-                dbg!(&sol_path);
                 return Err(e);
             }
         };
@@ -145,8 +140,17 @@ pub trait StrategyTemplate: Sized {
         let template_name = self.template_name();
 
         if let Ok(already_processed) = storage.get_one_exact(&template_name, params).await {
-            println!("Skipping already processed: {}_{:?}", template_name, params);
-            return already_processed.parse_into::<Self::Params>();
+            println!(
+                "Skipping already processed: {}_{}",
+                template_name,
+                params.name_suffix()
+            );
+            let mut loaded_params = already_processed.parse_into::<Self::Params>()?;
+            // for param in loaded_params.params_iter() {
+            // TODO NEXT
+            // }
+            // return loaded_params.parse_into::<Self::Params>();
+            return Ok(loaded_params);
         }
 
         let attempt_id = format!("{}_{}", template_name, params.name_suffix());
@@ -173,14 +177,14 @@ pub trait IsParams<Template>:
     fn sample_random(template: &Template) -> Self;
 
     /// Convert the parameters to a human‑readable string (e.g., for logging).
-    fn to_params_string(&self) -> String;
+    fn id(&self) -> String;
 
     /// Return a short name suffix (e.g., derived from the first few bytes of a hash).
     fn name_suffix(&self) -> String;
 }
 
 // Result of a single strategy backtest.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct StrategyResult<P> {
     pub template_name: String,
     pub params: P,
@@ -264,7 +268,7 @@ async fn exec_random_strategy_params(
     }
 
     // for params in strategy.params_iter() {
-    //     let params_str = params.to_params_string();
+    //     let params_str = params.id();
     // }
 
     println!("Done. Processed {} new strategies.", processed_count);
@@ -274,18 +278,36 @@ async fn exec_random_strategy_params(
 async fn refine_strategies_params(
     templates: &[TemplateFromFile],
     storage: &mut StrategyStorage,
+    args: &Args,
 ) -> anyhow::Result<()> {
     let mut template_names = Vec::new();
     for template in templates {
         template_names.push(template.template_name());
     }
 
-    for template_name in template_names {
-        let top10: Vec<StoredStrategyResult> = storage.best_n(10, Some(&template_name)).await?;
+    for template in templates {
+        let top10: Vec<StoredStrategyResult> =
+            storage.best_n(10, Some(&template.template_name())).await?;
         let mut parsed = Vec::<StrategyResult<SolidityFileParams>>::new();
         for result in top10 {
             parsed.push(result.parse_into()?);
-            dbg!(&parsed);
+        }
+
+        for result in &parsed {
+            if result.edge < 390.0 {
+                continue;
+            }
+            let mut current_result: StrategyResult<SolidityFileParams> = result.clone();
+            for _ in 0..1000 {
+                dbg!(&current_result.params);
+                let new_result = template
+                    .run_dedup(storage, &current_result.params.vary_one()?, args)
+                    .await?;
+                dbg!(&new_result.params);
+                if new_result.edge >= current_result.edge {
+                    current_result = new_result;
+                }
+            }
         }
     }
 

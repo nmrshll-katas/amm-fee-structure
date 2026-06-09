@@ -1,8 +1,8 @@
 use anyhow::Context;
 use primitive_types::U256;
-use rand::{RngExt, seq::IndexedRandom};
+use rand::{RngExt, rngs::ThreadRng, seq::IndexedRandom};
 use regex::Regex;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::{
     boxed::Box,
     collections::HashMap,
@@ -65,10 +65,16 @@ impl TemplateFromFile {
             .with_context(|| format!("Failed to parse template file: {}", selected_file.display()))
     }
 
-    pub fn set_gen_values(&mut self) {
+    pub fn set_gen_values(&mut self) -> anyhow::Result<()> {
         for def in self.constants.values_mut() {
-            def.generated_value = Some(def.random_variant());
+            match def.random_variant() {
+                Ok(value) => def.generated_value = Some(value),
+                Err(e) => {
+                    eprintln!("Failed to generate value for constant {}: {}", def.name, e);
+                }
+            }
         }
+        Ok(())
     }
 
     /// Regenerates the full Solidity source, replacing the RHS of every constant
@@ -133,24 +139,31 @@ impl StrategyTemplate for TemplateFromFile {
         todo!()
     }
 
-    fn random_params(&self) -> Self::Params {
+    fn random_params(&self) -> SolidityFileParams {
         let mut mut_params = self.constants.clone();
         for def in mut_params.values_mut() {
-            def.generated_value = Some(def.random_variant());
+            match def.random_variant() {
+                Ok(variant) => {
+                    def.generated_value = Some(variant);
+                }
+                Err(_e) => {
+                    println!("Failed to generate variant for constant: {}", def.name);
+                }
+            }
         }
         Self::Params { values: mut_params }
     }
 }
 
 /// Definition of a single constant extracted from the Solidity source.
-#[derive(Debug, Clone, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Hash)]
 pub struct ConstantDef {
     pub name: String,
     /// The original right‑hand side expression as a string (e.g., "WAD / 10").
     pub original_expr: String,
     /// An optional randomly generated value (as a U256) that will replace the expression
     /// when regenerating the source.
-    pub generated_value: Option<String>,
+    pub generated_value: Option<U256>,
     /// An optional range of values to use for generating the constant.
     pub range: Option<StepRange>,
 }
@@ -176,10 +189,14 @@ impl ConstantDef {
     }
 
     /// Generates a random decimal string within the defined range and step.
-    pub fn random_variant(&self) -> String {
+    pub fn random_variant(&self) -> anyhow::Result<U256> {
         match &self.range {
-            Some(range) => range.random_value().to_string(),
-            None => self.original_expr.clone(),
+            Some(range) => Ok(range.random_value()),
+            None => {
+                let value =
+                    U256::from_dec_str(&self.original_expr).map_err(|e| anyhow::anyhow!(e))?;
+                Ok(value)
+            }
         }
     }
 }
@@ -190,6 +207,56 @@ impl std::fmt::Display for ConstantDef {
         } else {
             write!(f, "{}", self.original_expr)
         }
+    }
+}
+impl Serialize for ConstantDef {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        use serde::ser::SerializeStruct;
+
+        let mut state = serializer.serialize_struct("ConstantDef", 2)?;
+        state.serialize_field("name", &self.name)?;
+        state.serialize_field("original_expr", &self.original_expr)?;
+
+        // Custom serialization for Option<U256>
+        match &self.generated_value {
+            Some(value) => state.serialize_field("generated_value", &value.to_string())?,
+            None => state.serialize_field("generated_value", &Option::<String>::None)?,
+        }
+
+        // state.serialize_field("range", &self.range)?;
+        state.end()
+    }
+}
+impl<'de> Deserialize<'de> for ConstantDef {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct ConstantDefHelper {
+            name: String,
+            original_expr: String,
+            generated_value: Option<String>,
+            range: Option<StepRange>,
+        }
+
+        let helper = ConstantDefHelper::deserialize(deserializer)?;
+
+        // Convert Option<String> to Option<U256> by parsing the string
+        let generated_value = match helper.generated_value {
+            Some(s) => Some(U256::from_dec_str(&s).map_err(serde::de::Error::custom)?),
+            None => None,
+        };
+
+        Ok(ConstantDef {
+            name: helper.name,
+            original_expr: helper.original_expr,
+            generated_value,
+            range: helper.range,
+        })
     }
 }
 
@@ -273,12 +340,87 @@ impl StepRange {
 
         self.min + index * self.step
     }
+
+    pub fn variation(&self, current: U256) -> U256 {
+        let mut rng = rand::rng();
+
+        if current < self.min || current > self.max {
+            return current;
+        }
+        let step_doubled = match self.step.checked_mul(U256::from(2)) {
+            Some(val) => val,
+            None => return current,
+        };
+
+        let random_val = random_u256(&mut rng) % step_doubled;
+
+        // let variation = if random_val < self.step {
+        //     self.step.checked_sub(random_val).unwrap_or(self.step)
+        // } else {
+        //     random_val.checked_sub(self.step).unwrap_or(U256::zero())
+        // };
+        // dbg!(&variation);
+        // dbg!(&self);
+
+        // Apply variation with proper signed arithmetic
+        let new_value = if random_val < self.step {
+            current
+                .checked_sub(self.step - random_val)
+                .unwrap_or(self.min)
+        } else {
+            current
+                .checked_add(random_val - self.step)
+                .unwrap_or(self.max)
+        };
+        dbg!(&new_value);
+
+        // Clamp to range
+        new_value.clamp(self.min, self.max)
+    }
 }
 
 /// Strategy parameters: a map from constant name to its numerical value.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SolidityFileParams {
     pub values: HashMap<String, ConstantDef>,
+}
+impl SolidityFileParams {
+    pub(crate) fn vary_one(&self) -> anyhow::Result<SolidityFileParams> {
+        if self.values.is_empty() {
+            return Err(anyhow::anyhow!("No values to vary"));
+        }
+        // Pick a random key
+        let mut rng = rand::rng();
+        let keys: Vec<&String> = self.values.keys().collect();
+        let random_key = keys[rng.random_range(0..keys.len())];
+
+        let mut new_params = self.clone();
+
+        if let Some(constant_def) = new_params.values.get_mut(random_key) {
+            let current_value = match constant_def.generated_value {
+                Some(val) => val,
+                None => match &constant_def.range {
+                    Some(range) => range.random_value(),
+                    None => todo!(),
+                },
+            };
+
+            let new_value = match &constant_def.range {
+                Some(range) => range.variation(current_value),
+                None => todo!(),
+            };
+
+            println!(
+                "changed {}: current_value={} new_value={}",
+                random_key, current_value, new_value
+            );
+
+            // Store the new value as a decimal string
+            constant_def.generated_value = Some(new_value);
+        }
+
+        Ok(new_params)
+    }
 }
 impl IsParams<TemplateFromFile> for SolidityFileParams {
     /// Returns a parameter set with random values.
@@ -287,7 +429,7 @@ impl IsParams<TemplateFromFile> for SolidityFileParams {
     }
 
     /// Returns a string representation of the parameters (e.g., for logging).
-    fn to_params_string(&self) -> String {
+    fn id(&self) -> String {
         use std::collections::hash_map::DefaultHasher;
         use std::hash::{Hash, Hasher};
         let mut hasher = DefaultHasher::new();
@@ -314,6 +456,45 @@ impl IsParams<TemplateFromFile> for SolidityFileParams {
         }
     }
 }
+impl std::fmt::Display for SolidityFileParams {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "TemplateFromFile:")?;
+        for (name, val) in &self.values {
+            let value_str = match &val.generated_value {
+                Some(v) => v.to_string(),
+                None => "none".to_string(),
+            };
+            writeln!(f, "  {}: {}", name, value_str)?;
+        }
+        Ok(())
+    }
+}
+
+fn random_u256(rng: &mut ThreadRng) -> U256 {
+    let mut bytes = [0u8; 32]; // 256 bits = 32 bytes
+    rng.fill(&mut bytes[..]);
+    U256::from_little_endian(&bytes)
+}
+
+mod u256_str {
+    use primitive_types::U256;
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S>(value: &U256, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&value.to_string())
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<U256, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        U256::from_dec_str(&s).map_err(serde::de::Error::custom)
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -333,7 +514,7 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_regenerate() {
+    fn test_parse_regenerate() -> anyhow::Result<()> {
         const SAMPLE_SOURCE: &str = r#"
             /// @notice Smoothing factor for EWMA (10% = 1e17). Must be in WAD.
             uint256 internal constant ALPHA = WAD / 10; // 0.1  range(1e16-1e17 by 1e16)
@@ -354,12 +535,10 @@ mod tests {
         assert_eq!(template.constants["FEE_SCALE"].original_expr, "1e16");
         assert_eq!(template.constants["BASE_FEE"].original_expr, "5 * BPS");
         // let mut rng = StdRng::seed_from_u64(42);
-        template.set_gen_values();
+        template.set_gen_values()?;
 
         // Check that values were assigned
-        for def in template.constants.values() {
-            assert!(def.generated_value.is_some());
-        }
+        assert!(template.constants["ALPHA"].generated_value.is_some()); // only alpha has a range to generate values
 
         let regenerated = template.to_solidity();
         println!("{}", regenerated);
@@ -386,11 +565,13 @@ mod tests {
         let reparsed = TemplateFromFile::parse_str(&regenerated).unwrap();
         assert_eq!(reparsed.constants.len(), 3);
         // The regenerated constants now have the new values as expressions.
-        for (name, def) in &reparsed.constants {
+        for (name, reparsed_def) in &reparsed.constants {
             let original_def = &template.constants[name];
-            let expected_value = original_def.generated_value.to_owned().unwrap().to_string();
-            assert_eq!(def.original_expr, expected_value);
+            if let Some(expected_value) = original_def.generated_value {
+                assert_eq!(reparsed_def.original_expr, expected_value.to_string());
+            }
         }
+        Ok(())
     }
 
     #[test]
@@ -413,24 +594,81 @@ mod tests {
 
         Ok(())
     }
-}
 
-mod u256_str {
-    use primitive_types::U256;
-    use serde::{Deserialize, Deserializer, Serializer};
+    #[test]
+    fn test_serialize_full_constant_def() {
+        let constant = ConstantDef {
+            name: "WAD".to_string(),
+            original_expr: "10 ** 18".to_string(),
+            generated_value: Some(U256::from(1000000000)),
+            range: Some(StepRange {
+                min: U256::from(1),
+                max: U256::from(100),
+                step: U256::from(1),
+            }),
+        };
 
-    pub fn serialize<S>(value: &U256, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        serializer.serialize_str(&value.to_string())
+        let json = serde_json::to_string(&constant).unwrap();
+
+        let expected =
+            r#"{"name":"WAD","original_expr":"10 ** 18","generated_value":"1000000000"}"#;
+        assert_eq!(json, expected);
     }
 
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<U256, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let s = String::deserialize(deserializer)?;
-        U256::from_dec_str(&s).map_err(serde::de::Error::custom)
+    #[test]
+    fn steprange_variation_returns_different_numbers() {
+        // Create a range with a reasonable step
+        let range = StepRange {
+            min: U256::from(100u64),
+            max: U256::from(200u64),
+            step: U256::from(10u64),
+        };
+
+        // Pick a current value inside the range
+        let current = U256::from(150u64);
+
+        // Collect many variation results
+        let iterations = 1000;
+        let mut results = Vec::with_capacity(iterations);
+        for _ in 0..iterations {
+            results.push(range.variation(current));
+        }
+
+        // Ensure at least two distinct values appear
+        let first = results[0];
+        let has_variation = results.iter().any(|&v| v != first);
+        assert!(
+            has_variation,
+            "All {} variation calls returned the same value: {}",
+            iterations, first
+        );
+
+        // Optional: verify all results stay within the range bounds
+        for &value in &results {
+            assert!(
+                value >= range.min && value <= range.max,
+                "Value {} is out of range [{}, {}]",
+                value,
+                range.min,
+                range.max
+            );
+        }
+    }
+
+    #[test]
+    fn steprange_variation_works_at_boundaries() {
+        let range = StepRange {
+            min: U256::from(0u64),
+            max: U256::from(100u64),
+            step: U256::from(25u64),
+        };
+
+        // At min, variation should not go below min
+        let at_min = range.variation(range.min);
+        assert!(at_min >= range.min);
+
+        // At max, variation should not exceed max
+        let at_max = range.variation(range.max);
+        assert!(at_max <= range.max);
     }
 }
