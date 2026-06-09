@@ -20,6 +20,17 @@ pub struct StoredStrategyResult {
     /// Edge value (profitability metric).
     pub edge: f64,
 }
+impl StoredStrategyResult {
+    pub fn parse_into<P: for<'de> serde::Deserialize<'de>>(&self) -> Result<StrategyResult<P>> {
+        let params =
+            serde_json::from_str(&self.params).context("Failed to deserialize parameters")?;
+        Ok(StrategyResult {
+            params,
+            edge: self.edge,
+            template_name: self.template_name.clone(),
+        })
+    }
+}
 
 /// Storage for strategy results using Turso and Toasty.
 pub struct StrategyStorage {
@@ -103,6 +114,37 @@ impl StrategyStorage {
             .exec(&mut self.db)
             .await?;
         Ok(count > 0)
+    }
+
+    /// Load one stored result matching the given template name and parameters.
+    pub async fn get_one_exact<P: Serialize>(
+        &mut self,
+        template_name: &str,
+        params: &P,
+    ) -> Result<StoredStrategyResult> {
+        let params_json =
+            serde_json::to_string(params).context("Failed to serialize parameters for loading")?;
+
+        let results = StoredStrategyResult::all()
+            .filter(
+                StoredStrategyResult::fields()
+                    .template_name()
+                    .eq(template_name),
+            )
+            .filter(StoredStrategyResult::fields().params().eq(&params_json))
+            .exec(&mut self.db)
+            .await?;
+
+        // assert exactly one result
+        if results.len() > 1 {
+            return Err(anyhow::anyhow!(
+                "Expected exactly one result, got {}",
+                results.len()
+            ));
+        }
+        let result = results.into_iter().next().context("No result found")?;
+
+        Ok(result)
     }
 
     /// Return the `n` best results for a template (highest edge), deserialized into `P`.

@@ -4,15 +4,16 @@
 
 use anyhow::{Context, Result, anyhow};
 use clap::Parser;
+use rand::seq::IndexedRandom;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::LazyLock;
 use std::time::Instant;
 
-use crate::storage::StrategyStorage;
+use crate::storage::{StoredStrategyResult, StrategyStorage};
 // use crate::strategies::boost_decay;
-use crate::strategies::from_file::TemplateFromFile;
+use crate::strategies::from_file::{SolidityFileParams, TemplateFromFile};
 
 pub mod strategies {
     pub mod boost_decay;
@@ -21,71 +22,37 @@ pub mod strategies {
 }
 pub mod storage;
 
+#[derive(Parser)]
+#[command(about = "Run automated strategy generation and backtesting loop using amm-match")]
+pub struct Args {
+    /// Number of new strategy variations to test (default: all unseen combos)
+    #[arg(long)]
+    iterations: Option<usize>,
+
+    /// Number of simulations per strategy
+    #[arg(long, default_value_t = 10)]
+    simulations: u64,
+
+    /// Output CSV file path (kept for backward compatibility, but storage is preferred)
+    #[arg(long, default_value = ".cache/strategy_results.csv")]
+    output: PathBuf,
+
+    /// Directory to store generated Solidity files
+    #[arg(long, default_value = ".cache/generated_strategies")]
+    sol_dir: PathBuf,
+
+    /// Turso database URL (e.g., "turso://...", "turso::memory:", or file path)
+    #[arg(long, default_value = "turso:.cache/db.sqlite")]
+    database_url: String,
+}
 #[tokio::main]
-async fn main() -> Result<()> {
-    #[derive(Parser)]
-    #[command(about = "Run automated strategy generation and backtesting loop using amm-match")]
-    struct Args {
-        /// Number of new strategy variations to test (default: all unseen combos)
-        #[arg(long)]
-        iterations: Option<usize>,
-
-        /// Number of simulations per strategy
-        #[arg(long, default_value_t = 10)]
-        simulations: u64,
-
-        /// Output CSV file path (kept for backward compatibility, but storage is preferred)
-        #[arg(long, default_value = ".cache/strategy_results.csv")]
-        output: PathBuf,
-
-        /// Directory to store generated Solidity files
-        #[arg(long, default_value = ".cache/generated_strategies")]
-        sol_dir: PathBuf,
-
-        /// Turso database URL (e.g., "turso://...", "turso::memory:", or file path)
-        #[arg(long, default_value = "turso:.cache/db.sqlite")]
-        database_url: String,
-    }
+async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
     std::fs::create_dir_all(&args.sol_dir)?;
     let mut storage = StrategyStorage::new(&args.database_url).await?;
 
-    pub enum LoopControl {
-        Next,
-        // Done,
-    }
-    async fn try_strategy_params<S: StrategyTemplate>(
-        strategy: &S,
-        storage: &mut StrategyStorage,
-        params: &S::Params,
-        args: &Args,
-    ) -> anyhow::Result<LoopControl> {
-        let template_name = strategy.template_name();
-
-        // Check if already processed
-        if storage.exists::<S::Params>(&template_name, params).await? {
-            println!("Skipping already processed: {}_{:?}", template_name, params);
-            return Ok(LoopControl::Next);
-        }
-
-        let attempt_id = format!("{}_{}", template_name, params.name_suffix());
-        let start = Instant::now();
-        match strategy.run_with_params(params, args.simulations, &args.sol_dir) {
-            Ok(result) => {
-                let elapsed = start.elapsed();
-                println!("  Edge: {:.2} (in {:.2?})", result.edge, elapsed);
-                storage
-                    .store_result(&result)
-                    .await
-                    .context("Failed to store result in database")?;
-                Ok(LoopControl::Next)
-            }
-            Err(e) => Err(e.context(format!("Failed in strategy {}", attempt_id))),
-        }
-    }
-
-    let template_files = vec![
+    let template_paths = vec![
         REPO.join("contracts/src/templates/BoostDecay.sol"),
         REPO.join("contracts/src/templates/StaticFee.sol"),
         REPO.join("contracts/src/templates/Variance.sol"),
@@ -93,35 +60,24 @@ async fn main() -> Result<()> {
         REPO.join("contracts/src/templates/Volatility2.sol"),
         REPO.join("contracts/src/templates/WidenAfterBigTrades.sol"),
     ];
-
-    let mut processed_count = 0;
-    // let template = boost_decay::Template {};
-
-    loop {
-        let template = TemplateFromFile::random_file(&template_files)?;
-        let params = template.random_params();
-
-        // If iterations limit is reached, stop
-        if let Some(limit) = args.iterations
-            && processed_count >= limit
-        {
-            println!("Reached iteration limit ({}). Stopping.", limit);
-            break;
-        }
-
-        match try_strategy_params(&template, &mut storage, &params, &args).await {
-            Ok(LoopControl::Next) => processed_count += 1,
-            Err(e) => return Err(e),
-        }
+    let mut templates = Vec::new();
+    for template in template_paths {
+        let template = TemplateFromFile::parse_file(&template)?;
+        templates.push(template);
     }
 
-    // for params in strategy.params_iter() {
-    //     let params_str = params.to_params_string();
-    // }
+    // let template = boost_decay::Template {};
 
-    println!("Done. Processed {} new strategies.", processed_count);
+    refine_strategies_params(&templates, &mut storage).await?;
+    exec_random_strategy_params(&templates, &mut storage, &args).await?;
+
     Ok(())
 }
+
+// pub enum LoopControl {
+//     Next,
+//     // Done,
+// }
 
 // -----------------------------------------------------------------------------
 // Running a single strategy via `amm-match`
@@ -176,6 +132,37 @@ pub trait StrategyTemplate: Sized {
             params: params.clone(),
             edge,
         })
+    }
+
+    /// Try to run a strategy with parameters, checking if already processed and storing results.
+    #[allow(async_fn_in_trait)]
+    async fn run_dedup(
+        &self,
+        storage: &mut StrategyStorage,
+        params: &Self::Params,
+        args: &Args,
+    ) -> anyhow::Result<StrategyResult<Self::Params>> {
+        let template_name = self.template_name();
+
+        if let Ok(already_processed) = storage.get_one_exact(&template_name, params).await {
+            println!("Skipping already processed: {}_{:?}", template_name, params);
+            return already_processed.parse_into::<Self::Params>();
+        }
+
+        let attempt_id = format!("{}_{}", template_name, params.name_suffix());
+        let start = Instant::now();
+        match self.run_with_params(params, args.simulations, &args.sol_dir) {
+            Ok(result) => {
+                let elapsed = start.elapsed();
+                println!("  Edge: {:.2} (in {:.2?})", result.edge, elapsed);
+                storage
+                    .store_result(&result)
+                    .await
+                    .context("Failed to store result in database")?;
+                Ok(result)
+            }
+            Err(e) => Err(e.context(format!("Failed in strategy {}", attempt_id))),
+        }
     }
 }
 pub trait IsParams<Template>:
@@ -247,6 +234,62 @@ fn parse_amm_output(stdout: &str) -> Result<f64> {
         }
     }
     Err(anyhow!("No 'Edge:' line found in:\n{}", stdout))
+}
+
+async fn exec_random_strategy_params(
+    templates: &[TemplateFromFile],
+    storage: &mut StrategyStorage,
+    args: &Args,
+) -> Result<()> {
+    let mut processed_count = 0;
+    let mut rng = rand::rng();
+    loop {
+        let template = templates
+            .choose(&mut rng)
+            .ok_or(anyhow!("Failed choosing a template"))?;
+        let params = template.random_params();
+
+        // If iterations limit is reached, stop
+        if let Some(limit) = args.iterations
+            && processed_count >= limit
+        {
+            println!("Reached iteration limit ({}). Stopping.", limit);
+            break;
+        }
+
+        match template.run_dedup(storage, &params, args).await {
+            Ok(_result) => processed_count += 1,
+            Err(e) => return Err(e),
+        }
+    }
+
+    // for params in strategy.params_iter() {
+    //     let params_str = params.to_params_string();
+    // }
+
+    println!("Done. Processed {} new strategies.", processed_count);
+    Ok(())
+}
+
+async fn refine_strategies_params(
+    templates: &[TemplateFromFile],
+    storage: &mut StrategyStorage,
+) -> anyhow::Result<()> {
+    let mut template_names = Vec::new();
+    for template in templates {
+        template_names.push(template.template_name());
+    }
+
+    for template_name in template_names {
+        let top10: Vec<StoredStrategyResult> = storage.best_n(10, Some(&template_name)).await?;
+        let mut parsed = Vec::<StrategyResult<SolidityFileParams>>::new();
+        for result in top10 {
+            parsed.push(result.parse_into()?);
+            dbg!(&parsed);
+        }
+    }
+
+    Ok(())
 }
 
 pub static REPO: LazyLock<PathBuf> = LazyLock::new(|| {
