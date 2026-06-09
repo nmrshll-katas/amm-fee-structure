@@ -4,6 +4,7 @@
 
 use anyhow::{Context, Result, anyhow};
 use clap::Parser;
+use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::LazyLock;
@@ -61,14 +62,10 @@ async fn main() -> Result<()> {
         args: &Args,
     ) -> anyhow::Result<LoopControl> {
         let template_name = strategy.template_name();
-        let params_str = params.to_params_string();
 
         // Check if already processed
-        if storage.exists(template_name, &params_str).await? {
-            println!(
-                "Skipping already processed: {}_{}",
-                template_name, params_str
-            );
+        if storage.exists::<S::Params>(&template_name, params).await? {
+            println!("Skipping already processed: {}_{:?}", template_name, params);
             return Ok(LoopControl::Next);
         }
 
@@ -88,12 +85,20 @@ async fn main() -> Result<()> {
         }
     }
 
+    let template_files = vec![
+        REPO.join("contracts/src/templates/BoostDecay.sol"),
+        REPO.join("contracts/src/templates/StaticFee.sol"),
+        REPO.join("contracts/src/templates/Variance.sol"),
+        REPO.join("contracts/src/templates/Volatility.sol"),
+        REPO.join("contracts/src/templates/Volatility2.sol"),
+        REPO.join("contracts/src/templates/WidenAfterBigTrades.sol"),
+    ];
+
     let mut processed_count = 0;
     // let template = boost_decay::Template {};
-    let template = TemplateFromFile::parse_file(&REPO.join("contracts/src/Variance.sol"))
-        .context("Failed to parse boost_decay.sol")?;
 
     loop {
+        let template = TemplateFromFile::random_file(&template_files)?;
         let params = template.random_params();
 
         // If iterations limit is reached, stop
@@ -128,7 +133,7 @@ pub trait StrategyTemplate: Sized {
     type Params: IsParams<Self>;
 
     /// Unique name of the template
-    fn template_name(&self) -> &'static str;
+    fn template_name(&self) -> String;
 
     /// Generate the full Solidity source for a given parameter set and strategy name.
     fn generate_solidity(&self, params: &Self::Params) -> String;
@@ -145,7 +150,7 @@ pub trait StrategyTemplate: Sized {
         params: &Self::Params,
         n_simulations: u64,
         sol_dir: &Path,
-    ) -> Result<StrategyResult> {
+    ) -> Result<StrategyResult<Self::Params>> {
         let source_code = self.generate_solidity(params);
 
         // Write solidity to a temp file
@@ -168,12 +173,14 @@ pub trait StrategyTemplate: Sized {
 
         Ok(StrategyResult {
             template_name: self.template_name().to_string(),
-            params: params.to_params_string(),
+            params: params.clone(),
             edge,
         })
     }
 }
-pub trait IsParams<Template> {
+pub trait IsParams<Template>:
+    std::fmt::Debug + Serialize + for<'de> Deserialize<'de> + Clone
+{
     /// Generate a random instance of the parameters, using the template
     /// to determine which constants (or other structure) need values.
     fn sample_random(template: &Template) -> Self;
@@ -187,9 +194,9 @@ pub trait IsParams<Template> {
 
 // Result of a single strategy backtest.
 #[derive(Debug)]
-pub struct StrategyResult {
+pub struct StrategyResult<P> {
     pub template_name: String,
-    pub params: String,
+    pub params: P,
     pub edge: f64,
 }
 /// Run `amm-match run` on a Solidity file.
@@ -265,7 +272,7 @@ mod tests {
                 .await
                 .expect("Failed to open real database");
 
-        let top = storage.best_n(20, None).await.unwrap();
+        let top = storage.best_n::<serde_json::Value>(20, None).await.unwrap();
         assert!(!top.is_empty(), "No results found in the database");
 
         println!("Fetched {} best results:", top.len());

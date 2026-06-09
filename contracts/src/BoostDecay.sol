@@ -4,7 +4,7 @@ pragma solidity ^0.8.24;
 import {AMMStrategyBase} from "./AMMStrategyBase.sol";
 import {TradeInfo} from "./IAMMStrategy.sol";
 
-/// @title Latent State Incumbent Gap-Aware V3 Candidate
+/// @title BoostOnShockThenDecay
 /// @notice Preserve calmer resting fees, but charge more aggressively during real shocks.
 contract Strategy is AMMStrategyBase {
     uint256 internal constant BASE_FEE = 69 * BPS;
@@ -156,7 +156,7 @@ contract Strategy is AMMStrategyBase {
     }
 
     function getName() external pure override returns (string memory) {
-        return "LatentStateIncumbentGapAwareV3";
+        return "BoostOnShockThenDecay";
     }
 
     function _blend(

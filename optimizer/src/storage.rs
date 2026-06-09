@@ -1,7 +1,10 @@
 //! Turso + Toasty storage for strategy results.
 
 use anyhow::{Context, Result};
+use serde::{Serialize, de::DeserializeOwned};
 use toasty::Db;
+
+use crate::StrategyResult;
 
 /// Database representation of a strategy result.
 #[derive(toasty::Model)]
@@ -55,11 +58,13 @@ impl StrategyStorage {
         Ok(())
     }
 
-    /// Stores a single strategy result.
-    pub async fn store_result(&mut self, result: &crate::StrategyResult) -> Result<()> {
+    /// Store a result for a given template. `P` must be serializable to JSON.
+    pub async fn store_result<P: Serialize>(&mut self, result: &StrategyResult<P>) -> Result<()> {
+        let params_json = serde_json::to_string(&result.params)
+            .context("Failed to serialize parameters to JSON")?;
         StoredStrategyResult::create()
             .template_name(&result.template_name)
-            .params(&result.params)
+            .params(&params_json)
             .edge(result.edge)
             .exec(&mut self.db)
             .await
@@ -67,11 +72,12 @@ impl StrategyStorage {
         Ok(())
     }
 
-    /// Loads strategy results, optionally filtered by template name.
-    pub async fn load_results(
+    /// Load all results for a specific template, deserializing the parameters into `P`.
+    /// All rows for this template must have the same parameter type `P`.
+    pub async fn load_results<P: DeserializeOwned>(
         &mut self,
         template_name: Option<&str>,
-    ) -> Result<Vec<crate::StrategyResult>> {
+    ) -> Result<Vec<StrategyResult<P>>> {
         let mut query = StoredStrategyResult::all();
         if let Some(name) = template_name {
             query = query.filter(StoredStrategyResult::fields().template_name().eq(name));
@@ -81,35 +87,54 @@ impl StrategyStorage {
             .await
             .context("Failed to load strategy results")?;
 
-        let results = stored
-            .into_iter()
-            .map(|s| crate::StrategyResult {
+        // let results = stored
+        //     .into_iter()
+        //     .map(|s| crate::StrategyResult {
+        //         template_name: s.template_name,
+        //         params: s.params,
+        //         edge: s.edge,
+        //     })
+        //     .collect();
+        let mut results = Vec::new();
+        for s in stored {
+            let params: P = serde_json::from_str(&s.params).with_context(|| {
+                format!(
+                    "Failed to deserialize params for template '{:?}'",
+                    template_name
+                )
+            })?;
+            results.push(StrategyResult {
                 template_name: s.template_name,
-                params: s.params,
+                params,
                 edge: s.edge,
-            })
-            .collect();
+            });
+        }
         Ok(results)
     }
 
-    /// Checks if a specific parameter combination already exists.
-    /// Useful to avoid re-running existing strategies.
-    pub async fn exists(&mut self, template: &str, params: &str) -> Result<bool> {
+    /// Check if a specific parameter combination already exists for a template.
+    pub async fn exists<P: Serialize>(&mut self, template_name: &str, params: &P) -> Result<bool> {
+        let params_json = serde_json::to_string(params)
+            .context("Failed to serialize parameters for existence check")?;
         let count = StoredStrategyResult::all()
-            .filter(StoredStrategyResult::fields().template_name().eq(template))
-            .filter(StoredStrategyResult::fields().params().eq(params))
+            .filter(
+                StoredStrategyResult::fields()
+                    .template_name()
+                    .eq(template_name),
+            )
+            .filter(StoredStrategyResult::fields().params().eq(&params_json))
             .count()
             .exec(&mut self.db)
             .await?;
         Ok(count > 0)
     }
 
-    /// Return the `n` best (highest edge) results, optionally filtered by template name.
-    pub async fn best_n(
+    /// Return the `n` best results for a template (highest edge), deserialized into `P`.
+    pub async fn best_n<P: DeserializeOwned>(
         &mut self,
         n: usize,
         template_name: Option<&str>,
-    ) -> Result<Vec<crate::StrategyResult>> {
+    ) -> Result<Vec<crate::StrategyResult<P>>> {
         let mut query = StoredStrategyResult::all()
             .order_by(StoredStrategyResult::fields().edge().desc())
             .limit(n);
@@ -120,14 +145,21 @@ impl StrategyStorage {
             .exec(&mut self.db)
             .await
             .context("Failed to load best results")?;
-        let results = stored
-            .into_iter()
-            .map(|s| crate::StrategyResult {
+
+        let mut results = Vec::new();
+        for s in stored {
+            let params: P = serde_json::from_str(&s.params).with_context(|| {
+                format!(
+                    "Failed to deserialize params for template '{:?}'",
+                    template_name
+                )
+            })?;
+            results.push(StrategyResult {
                 template_name: s.template_name,
-                params: s.params,
+                params,
                 edge: s.edge,
-            })
-            .collect();
+            });
+        }
         Ok(results)
     }
 }
@@ -161,7 +193,7 @@ mod tests {
         storage.store_result(&result1).await.unwrap();
         storage.store_result(&result2).await.unwrap();
 
-        let all = storage.load_results(None).await.unwrap();
+        let all = storage.load_results::<String>(None).await.unwrap();
         assert_eq!(all.len(), 2);
         // Order is not guaranteed, so check both exist.
         let first = &all[0];
@@ -208,13 +240,19 @@ mod tests {
         storage.store_result(&result2).await.unwrap();
         storage.store_result(&result3).await.unwrap();
 
-        let filtered = storage.load_results(Some("boost_decay_2")).await.unwrap();
+        let filtered = storage
+            .load_results::<String>(Some("boost_decay_2"))
+            .await
+            .unwrap();
         assert_eq!(filtered.len(), 2);
         for res in filtered {
             assert_eq!(res.template_name, "boost_decay_2");
         }
 
-        let empty = storage.load_results(Some("nonexistent")).await.unwrap();
+        let empty = storage
+            .load_results::<String>(Some("nonexistent"))
+            .await
+            .unwrap();
         assert!(empty.is_empty());
     }
 
@@ -230,21 +268,21 @@ mod tests {
 
         assert!(
             !storage
-                .exists("boost_decay_2", "0.1_0.2_0.3")
+                .exists("boost_decay_2", &"0.1_0.2_0.3")
                 .await
                 .unwrap()
         );
         storage.store_result(&result).await.unwrap();
         assert!(
             storage
-                .exists("boost_decay_2", "0.1_0.2_0.3")
+                .exists("boost_decay_2", &"0.1_0.2_0.3")
                 .await
                 .unwrap()
         );
 
         // Different template or params should be false.
-        assert!(!storage.exists("boost_decay_2", "0.4_0.5").await.unwrap());
-        assert!(!storage.exists("other", "0.1_0.2_0.3").await.unwrap());
+        assert!(!storage.exists("boost_decay_2", &"0.4_0.5").await.unwrap());
+        assert!(!storage.exists("other", &"0.1_0.2_0.3").await.unwrap());
     }
 
     #[tokio::test]
@@ -284,26 +322,35 @@ mod tests {
         }
 
         // Top 3 overall
-        let top3 = storage.best_n(3, None).await.unwrap();
+        let top3 = storage.best_n::<serde_json::Value>(3, None).await.unwrap();
         assert_eq!(top3.len(), 3);
         assert_eq!(top3[0].edge, 0.9);
         assert_eq!(top3[1].edge, 0.8);
         assert_eq!(top3[2].edge, 0.7);
 
         // Top 2 for template "a"
-        let top2_a = storage.best_n(2, Some("a")).await.unwrap();
+        let top2_a = storage
+            .best_n::<serde_json::Value>(2, Some("a"))
+            .await
+            .unwrap();
         assert_eq!(top2_a.len(), 2);
         assert_eq!(top2_a[0].edge, 0.9);
         assert_eq!(top2_a[1].edge, 0.5);
 
         // Request more than available
-        let all_b = storage.best_n(10, Some("b")).await.unwrap();
+        let all_b = storage
+            .best_n::<serde_json::Value>(10, Some("b"))
+            .await
+            .unwrap();
         assert_eq!(all_b.len(), 2);
         assert_eq!(all_b[0].edge, 0.8);
         assert_eq!(all_b[1].edge, 0.7);
 
         // Empty filter
-        let none = storage.best_n(5, Some("none")).await.unwrap();
+        let none = storage
+            .best_n::<serde_json::Value>(5, Some("none"))
+            .await
+            .unwrap();
         assert!(none.is_empty());
     }
 }

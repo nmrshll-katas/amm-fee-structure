@@ -59,7 +59,7 @@
             export UV_PROJECT_ENVIRONMENT="$VIRTUAL_ENV"
             uv run python -c "from amm_competition.cli import main; main()"
           '';
-          best = '' cargo test -p optimizer -- list_top_20 --no-capture'';
+          best = '' cargo test -p optimizer -- list_top_20 --no-capture --ignored'';
 
           # Deploy to a local Anvil instance (assumes anvil is already running)
           deploy-local = ''
