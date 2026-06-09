@@ -74,39 +74,18 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-// pub enum LoopControl {
-//     Next,
-//     // Done,
-// }
-
 // -----------------------------------------------------------------------------
 // Running a single strategy via `amm-match`
 // -----------------------------------------------------------------------------
 
-/// A strategy template that can generate Solidity code from parameters.
-pub trait StrategyTemplate: Sized {
-    /// The type of parameters this template uses.
-    type Params: IsParams<Self> + std::fmt::Display;
-
-    /// Unique name of the template
-    fn template_name(&self) -> String;
-
-    /// Generate the full Solidity source for a given parameter set and strategy name.
-    fn generate_solidity(&self, params: &Self::Params) -> String;
-
-    /// Generate all possible parameter combinations defined for this template.
-    fn params_iter(&self) -> Box<dyn Iterator<Item = Self::Params>>;
-
-    /// Generate a random set of parameters for this template.
-    fn random_params(&self) -> Self::Params;
-
+impl TemplateFromFile {
     /// Run a single strategy: generate Solidity, call amm-match, and return results.
     fn run_with_params(
         &self,
-        params: &Self::Params,
+        params: &SolidityFileParams,
         n_simulations: u64,
         sol_dir: &Path,
-    ) -> Result<StrategyResult<Self::Params>> {
+    ) -> Result<StrategyResult> {
         let source_code = self.generate_solidity(params);
 
         // Write solidity to a temp file
@@ -134,9 +113,9 @@ pub trait StrategyTemplate: Sized {
     async fn run_dedup(
         &self,
         storage: &mut StrategyStorage,
-        params: &Self::Params,
+        params: &SolidityFileParams,
         args: &Args,
-    ) -> anyhow::Result<StrategyResult<Self::Params>> {
+    ) -> anyhow::Result<StrategyResult> {
         let template_name = self.template_name();
 
         if let Ok(already_processed) = storage.get_one_exact(&template_name, params).await {
@@ -145,11 +124,11 @@ pub trait StrategyTemplate: Sized {
                 template_name,
                 params.name_suffix()
             );
-            let mut loaded_params = already_processed.parse_into::<Self::Params>()?;
+            let mut loaded_params = already_processed.parse_into::<SolidityFileParams>()?;
             // for param in loaded_params.params_iter() {
             // TODO NEXT
             // }
-            // return loaded_params.parse_into::<Self::Params>();
+            // return loaded_params.parse_into::<SolidityFileParams>();
             return Ok(loaded_params);
         }
 
@@ -169,25 +148,12 @@ pub trait StrategyTemplate: Sized {
         }
     }
 }
-pub trait IsParams<Template>:
-    std::fmt::Debug + Serialize + for<'de> Deserialize<'de> + Clone
-{
-    /// Generate a random instance of the parameters, using the template
-    /// to determine which constants (or other structure) need values.
-    fn sample_random(template: &Template) -> Self;
-
-    /// Convert the parameters to a human‑readable string (e.g., for logging).
-    fn id(&self) -> String;
-
-    /// Return a short name suffix (e.g., derived from the first few bytes of a hash).
-    fn name_suffix(&self) -> String;
-}
 
 // Result of a single strategy backtest.
 #[derive(Debug, Clone)]
-pub struct StrategyResult<P> {
+pub struct StrategyResult {
     pub template_name: String,
-    pub params: P,
+    pub params: SolidityFileParams,
     pub edge: f64,
 }
 /// Run `amm-match run` on a Solidity file.
@@ -288,16 +254,16 @@ async fn refine_strategies_params(
     for template in templates {
         let top10: Vec<StoredStrategyResult> =
             storage.best_n(10, Some(&template.template_name())).await?;
-        let mut parsed = Vec::<StrategyResult<SolidityFileParams>>::new();
+        let mut parsed = Vec::<StrategyResult>::new();
         for result in top10 {
-            parsed.push(result.parse_into()?);
+            parsed.push(result.parse_into::<SolidityFileParams>()?);
         }
 
         for result in &parsed {
             if result.edge < 390.0 {
                 continue;
             }
-            let mut current_result: StrategyResult<SolidityFileParams> = result.clone();
+            let mut current_result: StrategyResult = result.clone();
             for _ in 0..1000 {
                 dbg!(&current_result.params);
                 let new_result = template

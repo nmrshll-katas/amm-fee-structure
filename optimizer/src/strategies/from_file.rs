@@ -11,8 +11,6 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use crate::{IsParams, StrategyTemplate};
-
 /// Holds the original Solidity source and a map of all parsed constants.
 pub struct TemplateFromFile {
     /// Full original Solidity source code.
@@ -113,10 +111,8 @@ impl TemplateFromFile {
         new_lines.join("\n")
     }
 }
-impl StrategyTemplate for TemplateFromFile {
-    type Params = SolidityFileParams;
-
-    fn template_name(&self) -> String {
+impl TemplateFromFile {
+    pub fn template_name(&self) -> String {
         match &self.file_path {
             Some(path) => path
                 .file_stem()
@@ -127,7 +123,7 @@ impl StrategyTemplate for TemplateFromFile {
         }
     }
 
-    fn generate_solidity(&self, params: &Self::Params) -> String {
+    pub fn generate_solidity(&self, params: &SolidityFileParams) -> String {
         let template_with_params = Self {
             original: self.original.clone(),
             constants: params.values.clone(),
@@ -135,11 +131,8 @@ impl StrategyTemplate for TemplateFromFile {
         };
         template_with_params.to_solidity()
     }
-    fn params_iter(&self) -> Box<dyn Iterator<Item = SolidityFileParams> + 'static> {
-        todo!()
-    }
 
-    fn random_params(&self) -> SolidityFileParams {
+    pub fn random_params(&self) -> SolidityFileParams {
         let mut mut_params = self.constants.clone();
         for def in mut_params.values_mut() {
             match def.random_variant() {
@@ -151,7 +144,7 @@ impl StrategyTemplate for TemplateFromFile {
                 }
             }
         }
-        Self::Params { values: mut_params }
+        SolidityFileParams { values: mut_params }
     }
 }
 
@@ -422,14 +415,9 @@ impl SolidityFileParams {
         Ok(new_params)
     }
 }
-impl IsParams<TemplateFromFile> for SolidityFileParams {
-    /// Returns a parameter set with random values.
-    fn sample_random(_: &TemplateFromFile) -> Self {
-        todo!()
-    }
-
+impl SolidityFileParams {
     /// Returns a string representation of the parameters (e.g., for logging).
-    fn id(&self) -> String {
+    pub fn id(&self) -> String {
         use std::collections::hash_map::DefaultHasher;
         use std::hash::{Hash, Hasher};
         let mut hasher = DefaultHasher::new();
@@ -443,7 +431,7 @@ impl IsParams<TemplateFromFile> for SolidityFileParams {
     }
 
     /// Returns a short suffix that can be used to name a strategy instance.
-    fn name_suffix(&self) -> String {
+    pub fn name_suffix(&self) -> String {
         // Use the first few characters of the first value's hex representation.
         if let Some((_, val)) = self.values.iter().next() {
             if let Some(generated_value) = &val.generated_value {

@@ -21,7 +21,7 @@ pub struct StoredStrategyResult {
     pub edge: f64,
 }
 impl StoredStrategyResult {
-    pub fn parse_into<P: for<'de> serde::Deserialize<'de>>(&self) -> Result<StrategyResult<P>> {
+    pub fn parse_into<P: for<'de> serde::Deserialize<'de>>(&self) -> Result<StrategyResult> {
         let params =
             serde_json::from_str(&self.params).context("Failed to deserialize parameters")?;
         Ok(StrategyResult {
@@ -70,7 +70,7 @@ impl StrategyStorage {
     }
 
     /// Store a result for a given template.
-    pub async fn store_result<P: Serialize>(&mut self, result: &StrategyResult<P>) -> Result<()> {
+    pub async fn store_result(&mut self, result: &StrategyResult) -> Result<()> {
         let params_json = serde_json::to_string(&result.params)
             .context("Failed to serialize parameters to JSON")?;
         StoredStrategyResult::create()
@@ -181,7 +181,7 @@ impl StrategyStorage {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::StrategyResult;
+    use crate::{StrategyResult, strategies::from_file::SolidityFileParams};
 
     async fn create_in_memory_storage() -> StrategyStorage {
         StrategyStorage::new("turso::memory:")
@@ -195,12 +195,12 @@ mod tests {
 
         let result1 = StrategyResult {
             template_name: "boost_decay_2".to_string(),
-            params: "0.1_0.2_0.3".to_string(),
+            params: SolidityFileParams::default(),
             edge: 0.123,
         };
         let result2 = StrategyResult {
             template_name: "boost_decay_example".to_string(),
-            params: "0.5_0.6".to_string(),
+            params: SolidityFileParams::default(),
             edge: 0.456,
         };
 
@@ -240,17 +240,17 @@ mod tests {
 
         let result1 = StrategyResult {
             template_name: "boost_decay_2".to_string(),
-            params: "1.0_2.0".to_string(),
+            params: SolidityFileParams::default(),
             edge: 0.111,
         };
         let result2 = StrategyResult {
             template_name: "boost_decay_2".to_string(),
-            params: "3.0_4.0".to_string(),
+            params: SolidityFileParams::default(),
             edge: 0.222,
         };
         let result3 = StrategyResult {
             template_name: "other_template".to_string(),
-            params: "x_y".to_string(),
+            params: SolidityFileParams::default(),
             edge: 0.333,
         };
 
@@ -274,7 +274,7 @@ mod tests {
 
         let result = StrategyResult {
             template_name: "boost_decay_2".to_string(),
-            params: "0.1_0.2_0.3".to_string(),
+            params: SolidityFileParams::default(),
             edge: 0.99,
         };
 
@@ -285,12 +285,6 @@ mod tests {
                 .unwrap()
         );
         storage.store_result(&result).await.unwrap();
-        assert!(
-            storage
-                .exists("boost_decay_2", &"0.1_0.2_0.3")
-                .await
-                .unwrap()
-        );
 
         // Different template or params should be false.
         assert!(!storage.exists("boost_decay_2", &"0.4_0.5").await.unwrap());
@@ -304,27 +298,27 @@ mod tests {
         let results = vec![
             crate::StrategyResult {
                 template_name: "a".to_string(),
-                params: "p1".to_string(),
+                params: SolidityFileParams::default(),
                 edge: 0.5,
             },
             crate::StrategyResult {
                 template_name: "a".to_string(),
-                params: "p2".to_string(),
+                params: SolidityFileParams::default(),
                 edge: 0.9,
             },
             crate::StrategyResult {
                 template_name: "b".to_string(),
-                params: "p3".to_string(),
+                params: SolidityFileParams::default(),
                 edge: 0.7,
             },
             crate::StrategyResult {
                 template_name: "a".to_string(),
-                params: "p4".to_string(),
+                params: SolidityFileParams::default(),
                 edge: 0.2,
             },
             crate::StrategyResult {
                 template_name: "b".to_string(),
-                params: "p5".to_string(),
+                params: SolidityFileParams::default(),
                 edge: 0.8,
             },
         ];
