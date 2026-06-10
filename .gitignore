@@ -19,7 +19,6 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
-
 # Virtual environments
 .venv/
 venv/
@@ -33,6 +32,9 @@ Cargo.lock
 contracts/cache/
 contracts/out/
 contracts/lib/
+**/cache/
+**/out/
+**/lib/
 
 # IDE
 .idea/
@@ -50,9 +52,13 @@ Thumbs.db
 .coverage
 htmlcov/
 
-# Strategies
-strategies/
+
 
 # Misc
 *.log
 .env
+
+
+# Added by cargo
+
+/target

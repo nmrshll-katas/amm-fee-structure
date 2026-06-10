@@ -1,0 +1,4 @@
+[workspace]
+members = ["optimizer"]
+exclude = ["amm_sim_rs"]
+resolver = "2"
