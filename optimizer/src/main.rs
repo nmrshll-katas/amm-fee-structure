@@ -54,10 +54,10 @@ async fn main() -> anyhow::Result<()> {
     let template_paths = vec![
         REPO.join("contracts/src/templates/BoostDecay.sol"),
         // REPO.join("contracts/src/templates/StaticFee.sol"),
-        REPO.join("contracts/src/templates/Variance.sol"),
+        // REPO.join("contracts/src/templates/Variance.sol"),
         // REPO.join("contracts/src/templates/Volatility.sol"),
         REPO.join("contracts/src/templates/Volatility2.sol"),
-        REPO.join("contracts/src/templates/WidenAfterBigTrades.sol"),
+        // REPO.join("contracts/src/templates/WidenAfterBigTrades.sol"),
     ];
     let mut templates = Vec::new();
     for template in template_paths {
@@ -267,14 +267,18 @@ async fn refine_strategies_params(
         }
 
         for top10_result in &parsed_top10 {
-            dbg!(&top10_result.params.to_string());
+            dbg!(&top10_result.params.to_string(), &top10_result.edge);
             if top10_result.edge < 390.0 {
                 continue;
             }
             let mut current_result: StrategyResult = top10_result.clone();
             for _ in 0..1000 {
                 let new_result = template
-                    .run_dedup(storage, &current_result.params.vary_one()?, args)
+                    .run_dedup(
+                        storage,
+                        &current_result.params.vary_one(&template.constants)?,
+                        args,
+                    )
                     .await?;
                 if new_result.edge >= current_result.edge {
                     current_result = new_result;

@@ -341,15 +341,13 @@ impl StepRange {
         }
 
         let delta = random_u256(&mut rng) % (self.step.saturating_add(U256::from(1)));
-        let new = if rng.random_bool(0.5) {
-            current.saturating_add(delta)
+        let multiple_delta = delta * 10;
+        if rng.random_bool(0.5) {
+            current.saturating_add(multiple_delta)
         } else {
-            current.saturating_sub(delta)
+            current.saturating_sub(multiple_delta)
         }
-        .clamp(self.min, self.max);
-
-        dbg!(&new, self.min, self.max);
-        new
+        .clamp(self.min, self.max)
     }
 }
 
@@ -359,38 +357,49 @@ pub struct SolidityFileParams {
     pub values: HashMap<String, ConstantDef>,
 }
 impl SolidityFileParams {
-    pub(crate) fn vary_one(&self) -> anyhow::Result<SolidityFileParams> {
+    pub(crate) fn vary_one(
+        &self,
+        constant_defs: &HashMap<String, ConstantDef>,
+    ) -> anyhow::Result<SolidityFileParams> {
         if self.values.is_empty() {
             return Err(anyhow::anyhow!("No values to vary"));
         }
         // Pick a random key
         let mut rng = rand::rng();
         let keys: Vec<&String> = self.values.keys().collect();
-        let random_key = keys[rng.random_range(0..keys.len())];
+        let picked_key = keys[rng.random_range(0..keys.len())];
 
         let mut new_params = self.clone();
 
-        if let Some(constant_def) = new_params.values.get_mut(random_key) {
-            let current_value = match constant_def.generated_value {
+        if let Some(mut_constant_def) = new_params.values.get_mut(picked_key) {
+            let current_value = match mut_constant_def.generated_value {
                 Some(val) => val,
-                None => match &constant_def.range {
+                None => match &mut_constant_def.range {
                     Some(range) => range.random_value(),
                     None => todo!(),
                 },
             };
 
-            let new_value = match &constant_def.range {
+            let new_value = match &mut_constant_def.range {
                 Some(range) => range.variation(current_value),
-                None => todo!(),
+                None => {
+                    let defs = constant_defs.get(picked_key).ok_or_else(|| {
+                        anyhow::anyhow!("No constant def for key: {}", picked_key)
+                    })?;
+                    let range = defs.range.as_ref().ok_or_else(|| {
+                        anyhow::anyhow!("No range for constant def: {}", picked_key)
+                    })?;
+                    range.variation(current_value)
+                }
             };
 
             println!(
                 "changed {}: current_value={} new_value={}",
-                random_key, current_value, new_value
+                picked_key, current_value, new_value
             );
 
             // Store the new value as a decimal string
-            constant_def.generated_value = Some(new_value);
+            mut_constant_def.generated_value = Some(new_value);
         }
 
         Ok(new_params)
