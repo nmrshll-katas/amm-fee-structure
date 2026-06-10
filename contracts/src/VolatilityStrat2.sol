@@ -12,7 +12,6 @@ contract Strategy is AMMStrategyBase {
 
     uint256 private constant WINDOW = 8; // number of prices for vol estimation
 
-    // -------- Storage layout (slots are free, we use them explicitly) --------
     // slots[0] = initialX
     // slots[1] = initialY
     // slots[2] = number of stored prices (max WINDOW)
@@ -41,15 +40,12 @@ contract Strategy is AMMStrategyBase {
     function afterSwap(
         TradeInfo calldata trade
     ) external returns (uint256 bidFee, uint256 askFee) {
-        // ----- 1. Read state from storage -----
         uint256 initialX = readSlot(0);
-        uint256 initialY = readSlot(1);
         uint256 count = readSlot(2); // number of stored prices (≤ WINDOW)
 
         uint256 reserveX = trade.reserveX;
         uint256 reserveY = trade.reserveY;
 
-        // ----- 2. Update price buffer with the new post‑swap price -----
         uint256 newPrice = wdiv(reserveY, reserveX);
         if (count < WINDOW) {
             // Append at the end
@@ -66,7 +62,6 @@ contract Strategy is AMMStrategyBase {
         // Updated count (might have increased or stayed at WINDOW)
         uint256 newCount = readSlot(2);
 
-        // ----- 3. Compute volatility (average absolute % change over last trades) -----
         uint256 volatility = 0;
         if (newCount >= 2) {
             uint256 sumAbsReturns = 0;
@@ -84,12 +79,10 @@ contract Strategy is AMMStrategyBase {
             volatility = sumAbsReturns / pairs; // average absolute return (WAD)
         }
 
-        // ----- 4. Base fee + volatility adjustment -----
         uint256 volComponent = wmul(VOL_MULTIPLIER, volatility);
         uint256 baseVol = BASE_FEE + volComponent;
         if (baseVol > MAX_FEE) baseVol = MAX_FEE;
 
-        // ----- 5. Inventory imbalance adjustment -----
         // imbalance ratio = |reserveX - initialX| / initialX   (WAD)
         uint256 diffX = reserveX > initialX
             ? reserveX - initialX
@@ -113,13 +106,12 @@ contract Strategy is AMMStrategyBase {
             askFee = baseVol;
         }
 
-        // ----- 6. Clamp to allowed range and return -----
         bidFee = clampFee(bidFee);
         askFee = clampFee(askFee);
         return (bidFee, askFee);
     }
 
     function getName() external pure returns (string memory) {
-        return "Volatility & Inventory Strategy";
+        return "Volatility + Inventory";
     }
 }

@@ -32,7 +32,7 @@ contract Strategy is AMMStrategyBase {
     /// @inheritdoc IAMMStrategy
     function afterSwap(
         TradeInfo calldata trade
-    ) external override returns (uint256 bidFee, uint256 askFee) {
+    ) external view override returns (uint256 bidFee, uint256 askFee) {
         // 1. Current price from post‑trade reserves
         uint256 currentPrice = (trade.reserveY * WAD) / trade.reserveX;
 
@@ -67,6 +67,6 @@ contract Strategy is AMMStrategyBase {
 
     /// @inheritdoc IAMMStrategy
     function getName() external pure override returns (string memory) {
-        return "InventoryAware_k5_base20bps";
+        return "InventoryAware";
     }
 }
