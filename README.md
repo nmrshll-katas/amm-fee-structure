@@ -168,6 +168,10 @@ contract Strategy is AMMStrategyBase {
 
 ## CLI
 
+With Nix, enter `nix develop` from the repository root to activate the project's
+Python environment. Run `simbuild` before the first simulation and after
+changing the Rust engine.
+
 ```bash
 # Build the Rust engine
 cd amm_sim_rs && pip install maturin && maturin develop --release && cd ..
