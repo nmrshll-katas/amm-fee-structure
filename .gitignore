@@ -58,6 +58,7 @@ htmlcov/
 # Misc
 *.log
 .env
+!/.envrc
 
 
 # Added by cargo
