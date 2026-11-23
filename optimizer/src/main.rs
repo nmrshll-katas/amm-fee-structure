@@ -46,10 +46,17 @@ pub struct Args {
     /// Turso database URL (e.g., "turso://...", "turso::memory:", or file path)
     #[arg(long, default_value = "turso:.cache/db.sqlite")]
     database_url: String,
+
+    /// Export Solidity for the committed seeds and exit without running simulations
+    #[arg(long, value_name = "DIR")]
+    export_seed_solidity: Option<PathBuf>,
 }
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
+    if let Some(output_dir) = &args.export_seed_solidity {
+        return export_seed_solidity(output_dir);
+    }
 
     std::fs::create_dir_all(&args.sol_dir)?;
     let mut storage = StrategyStorage::new(&args.database_url).await?;
@@ -177,6 +184,14 @@ struct OptimizerSeed {
 }
 
 impl OptimizerSeed {
+    fn load_template(&self) -> Result<TemplateFromFile> {
+        let path = REPO
+            .join("contracts/src/templates")
+            .join(format!("{}.sol", self.template_name));
+        TemplateFromFile::parse_file(&path)
+            .with_context(|| format!("Failed to load template for seed {}", self.result_id))
+    }
+
     fn strategy_params(&self, template: &TemplateFromFile) -> Result<SolidityFileParams> {
         let mut values = template.constants.clone();
         for (name, value) in &self.params {
@@ -190,6 +205,28 @@ impl OptimizerSeed {
         }
         Ok(SolidityFileParams { values })
     }
+}
+
+fn load_seeds() -> Result<Vec<OptimizerSeed>> {
+    serde_json::from_str(SEED_RESULTS).context("Failed to read optimizer seeds")
+}
+
+fn export_seed_solidity(output_dir: &Path) -> Result<()> {
+    let seeds = load_seeds()?;
+    std::fs::create_dir_all(output_dir)?;
+    for seed in &seeds {
+        let template = seed.load_template()?;
+        let params = seed.strategy_params(&template)?;
+        let path = output_dir.join(format!("{}-{}.sol", seed.template_name, seed.result_id));
+        std::fs::write(&path, template.generate_solidity(&params))
+            .with_context(|| format!("Failed to write {}", path.display()))?;
+    }
+    println!(
+        "Exported {} seed strategies to {}",
+        seeds.len(),
+        output_dir.display()
+    );
+    Ok(())
 }
 
 /// Run `amm-match run` on a Solidity file.
@@ -312,9 +349,7 @@ async fn refine_from_seeds(
     storage: &mut StrategyStorage,
     args: &Args,
 ) -> Result<()> {
-    let seeds: Vec<OptimizerSeed> =
-        serde_json::from_str(SEED_RESULTS).context("Failed to read optimizer seeds")?;
-    for seed in seeds {
+    for seed in load_seeds()? {
         let template = templates
             .iter()
             .find(|template| template.template_name() == seed.template_name);
@@ -322,12 +357,7 @@ async fn refine_from_seeds(
         let template = match template {
             Some(template) => template,
             None => {
-                let path = REPO
-                    .join("contracts/src/templates")
-                    .join(format!("{}.sol", seed.template_name));
-                seed_template = TemplateFromFile::parse_file(&path).with_context(|| {
-                    format!("Failed to load template for seed {}", seed.result_id)
-                })?;
+                seed_template = seed.load_template()?;
                 &seed_template
             }
         };
@@ -377,18 +407,37 @@ mod tests {
 
     #[test]
     fn committed_seeds_can_be_refined() -> Result<()> {
-        let seeds: Vec<OptimizerSeed> = serde_json::from_str(SEED_RESULTS)?;
-        assert_eq!(seeds.len(), 20);
+        let seeds = load_seeds()?;
+        let mut params_by_template = BTreeMap::<_, std::collections::BTreeSet<_>>::new();
+        for seed in &seeds {
+            assert!(
+                params_by_template
+                    .entry(seed.template_name.as_str())
+                    .or_default()
+                    .insert(&seed.params)
+            );
+        }
+        assert_eq!(
+            params_by_template
+                .into_iter()
+                .map(|(name, params)| (name, params.len()))
+                .collect::<BTreeMap<_, _>>(),
+            BTreeMap::from([
+                ("BoostDecay", 20),
+                ("StaticFee", 2),
+                ("Variance", 2),
+                ("Volatility", 2),
+                ("Volatility2", 2),
+                ("WidenAfterBigTrades", 2),
+            ])
+        );
         assert!(seeds.windows(2).all(|pair| {
             pair[0].recorded_edge > pair[1].recorded_edge
                 || (pair[0].recorded_edge == pair[1].recorded_edge
                     && pair[0].result_id < pair[1].result_id)
         }));
         for seed in seeds {
-            let path = REPO
-                .join("contracts/src/templates")
-                .join(format!("{}.sol", seed.template_name));
-            let template = TemplateFromFile::parse_file(&path)?;
+            let template = seed.load_template()?;
             let params = seed.strategy_params(&template)?;
             for name in seed.params.keys() {
                 let constant = &params.values[name];

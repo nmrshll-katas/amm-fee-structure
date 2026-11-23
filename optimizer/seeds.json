@@ -238,5 +238,103 @@
     "recorded_edge": 429.62,
     "result_id": 1289,
     "template_name": "BoostDecay"
+  },
+  {
+    "params": {
+      "BASE_FEE_BPS": "78",
+      "FEE_DECAY_BPS": "9",
+      "FEE_INCREMENT_BPS": "43",
+      "LARGE_TRADE_THRESHOLD_DIVISOR": "98"
+    },
+    "recorded_edge": 421.21,
+    "result_id": 13489,
+    "template_name": "WidenAfterBigTrades"
+  },
+  {
+    "params": {
+      "BASE_FEE_BPS": "74",
+      "FEE_DECAY_BPS": "9",
+      "FEE_INCREMENT_BPS": "44",
+      "LARGE_TRADE_THRESHOLD_DIVISOR": "97"
+    },
+    "recorded_edge": 420.97,
+    "result_id": 12272,
+    "template_name": "WidenAfterBigTrades"
+  },
+  {
+    "params": {
+      "FEE": "8000000000000000"
+    },
+    "recorded_edge": 406.83,
+    "result_id": 13255,
+    "template_name": "StaticFee"
+  },
+  {
+    "params": {
+      "FEE": "8100000000000000"
+    },
+    "recorded_edge": 406.82,
+    "result_id": 14263,
+    "template_name": "StaticFee"
+  },
+  {
+    "params": {
+      "BASE_FEE_WAD": "4000000000000",
+      "LAMBDA_WAD": "998111138590513515",
+      "SENSITIVITY_WAD": "1679589501206646107"
+    },
+    "recorded_edge": 404.04,
+    "result_id": 14990,
+    "template_name": "Volatility2"
+  },
+  {
+    "params": {
+      "BASE_FEE_WAD": "3996440753487",
+      "LAMBDA_WAD": "998111138590513515",
+      "SENSITIVITY_WAD": "1679589501206646107"
+    },
+    "recorded_edge": 404.04,
+    "result_id": 15004,
+    "template_name": "Volatility2"
+  },
+  {
+    "params": {
+      "ALPHA": "100000000000000000",
+      "BASE_FEE": "5000000000000000",
+      "FEE_SCALE": "100000000000000000"
+    },
+    "recorded_edge": 401.94,
+    "result_id": 14278,
+    "template_name": "Volatility"
+  },
+  {
+    "params": {
+      "ALPHA": "99990365502887817",
+      "BASE_FEE": "5000000000000000",
+      "FEE_SCALE": "100000000000000000"
+    },
+    "recorded_edge": 401.94,
+    "result_id": 14561,
+    "template_name": "Volatility"
+  },
+  {
+    "params": {
+      "ALPHA": "10000000000000000",
+      "BASE_FEE": "4200000000000000",
+      "FEE_SCALE": "86000000000000000"
+    },
+    "recorded_edge": 61.86,
+    "result_id": 8911,
+    "template_name": "Variance"
+  },
+  {
+    "params": {
+      "ALPHA": "40000000000000000",
+      "BASE_FEE": "4200000000000000",
+      "FEE_SCALE": "48000000000000000"
+    },
+    "recorded_edge": 61.86,
+    "result_id": 9132,
+    "template_name": "Variance"
   }
 ]

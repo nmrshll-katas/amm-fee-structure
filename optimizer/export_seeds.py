@@ -1,10 +1,13 @@
-"""Export the optimizer database's 20 highest-scoring results as JSON."""
+"""Export the top 20 optimizer results plus two from each remaining strategy type."""
 
 import argparse
 import json
 import re
 import sqlite3
 from pathlib import Path
+
+
+TEMPLATE_ALIASES = {"boost_decay_2": "BoostDecay"}
 
 
 def seed_params(template_name, stored_params):
@@ -19,16 +22,26 @@ def seed_params(template_name, stored_params):
         if fields is None:
             raise ValueError(f"Invalid legacy BoostDecay parameters: {stored_params}")
         names = ("BASE_FEE", "DECAY_FAST", "DECAY_SLOW", "DECAY_COOLDOWN", "ALPHA_SPOT")
-        return "BoostDecay", {
+        return {
             name: str(int(value) * 10**14)
             for name, value in zip(names, fields.groups())
         }
 
     values = json.loads(stored_params)["values"]
-    return template_name, {
+    return {
         name: definition["generated_value"]
         for name, definition in values.items()
         if definition["generated_value"] is not None
+    }
+
+
+def make_seed(row):
+    result_id, template_name, stored_params, edge = row
+    return {
+        "result_id": result_id,
+        "template_name": TEMPLATE_ALIASES.get(template_name, template_name),
+        "recorded_edge": edge,
+        "params": seed_params(template_name, stored_params),
     }
 
 
@@ -48,24 +61,29 @@ def main():
             SELECT id, template_name, params, edge
             FROM strategy_results
             ORDER BY edge DESC, id ASC
-            LIMIT 20
             """
         ).fetchall()
 
-    if len(rows) != 20:
+    if len(rows) < 20:
         parser.error(f"expected at least 20 results, found {len(rows)}")
 
-    seeds = []
-    for result_id, stored_template, stored_params, edge in rows:
-        template_name, params = seed_params(stored_template, stored_params)
-        seeds.append(
-            {
-                "result_id": result_id,
-                "template_name": template_name,
-                "recorded_edge": edge,
-                "params": params,
-            }
-        )
+    seeds = [make_seed(row) for row in rows[:20]]
+    top_templates = {seed["template_name"] for seed in seeds}
+    supplemental_params = {}
+    for row in rows[20:]:
+        stored_template = row[1]
+        template_name = TEMPLATE_ALIASES.get(stored_template, stored_template)
+        if template_name in top_templates:
+            continue
+        selected = supplemental_params.setdefault(template_name, set())
+        if len(selected) == 2:
+            continue
+        seed = make_seed(row)
+        params = tuple(sorted(seed["params"].items()))
+        if params not in selected:
+            selected.add(params)
+            seeds.append(seed)
+
     args.output.write_text(
         json.dumps(seeds, indent=2, sort_keys=True, allow_nan=False) + "\n",
         encoding="utf-8",

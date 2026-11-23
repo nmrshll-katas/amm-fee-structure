@@ -58,18 +58,25 @@ I added an optimizer that goes in 2 phases:
 2. refinement: takes the previous best combination (strategy, params), and tries varying parameters slightly to see if they can be improved iteratively (hill-climbing)
 The optimizing code (rust) lives in "./optimizer"
 
-The optimizer starts with the 20 candidates in `optimizer/seeds.json`. It
-re-runs each candidate using the current `--simulations` setting and gives it
-1,000 refinement attempts before continuing with the local results database
-and random exploration. The JSON keeps the original database IDs and edge
-scores so the selection can be traced.
+The optimizer starts with the candidates in `optimizer/seeds.json`. It re-runs
+each candidate using the current `--simulations` setting and gives it 1,000
+refinement attempts before continuing with the local results database and
+random exploration. The JSON keeps the original database IDs and edge scores.
 
 To refresh the seed file from the local database, run this from the repository
-root. The exporter sorts by highest recorded edge and breaks ties by lowest
-database ID.
+root. The exporter keeps the 20 highest-scoring results and adds the two best
+distinct parameter sets for each strategy type absent from those 20. It breaks
+ties by lowest database ID.
 
 ```sh
 python3 optimizer/export_seeds.py .cache/db.sqlite optimizer/seeds.json
+```
+
+To regenerate the Solidity files from the committed seeds without running
+simulations, run this from the repository root.
+
+```sh
+cargo run -p optimizer -- --export-seed-solidity .cache/seed_strategies
 ```
 
 ### Links
