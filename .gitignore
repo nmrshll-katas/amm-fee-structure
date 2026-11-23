@@ -27,6 +27,7 @@ ENV/
 # Rust
 target/
 Cargo.lock
+!/Cargo.lock
 
 # Foundry
 contracts/cache/
