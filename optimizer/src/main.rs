@@ -4,7 +4,10 @@
 
 use anyhow::{Context, Result, anyhow};
 use clap::Parser;
+use primitive_types::U256;
 use rand::seq::IndexedRandom;
+use serde::Deserialize;
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::LazyLock;
@@ -65,8 +68,7 @@ async fn main() -> anyhow::Result<()> {
         templates.push(template);
     }
 
-    // let template = boost_decay::Template {};
-
+    refine_from_seeds(&templates, &mut storage, &args).await?;
     refine_strategies_params(&templates, &mut storage, &args).await?;
     exec_random_strategy_params(&templates, &mut storage, &args).await?;
 
@@ -163,6 +165,33 @@ pub struct StrategyResult {
     pub params: SolidityFileParams,
     pub edge: f64,
 }
+
+const SEED_RESULTS: &str = include_str!("../seeds.json");
+
+#[derive(Deserialize)]
+struct OptimizerSeed {
+    result_id: i64,
+    template_name: String,
+    recorded_edge: f64,
+    params: BTreeMap<String, String>,
+}
+
+impl OptimizerSeed {
+    fn strategy_params(&self, template: &TemplateFromFile) -> Result<SolidityFileParams> {
+        let mut values = template.constants.clone();
+        for (name, value) in &self.params {
+            let constant = values
+                .get_mut(name)
+                .with_context(|| format!("Unknown constant {name} in seed {}", self.result_id))?;
+            constant.generated_value =
+                Some(U256::from_dec_str(value).with_context(|| {
+                    format!("Invalid value for {name} in seed {}", self.result_id)
+                })?);
+        }
+        Ok(SolidityFileParams { values })
+    }
+}
+
 /// Run `amm-match run` on a Solidity file.
 fn run_amm_match(solidity_path: &Path, n_simulations: u64) -> Result<f64> {
     let mut cmd = Command::new("uv");
@@ -271,23 +300,63 @@ async fn refine_strategies_params(
             if top10_result.edge < 390.0 {
                 continue;
             }
-            let mut current_result: StrategyResult = top10_result.clone();
-            for _ in 0..1000 {
-                let new_result = template
-                    .run_dedup(
-                        storage,
-                        &current_result.params.vary_one(&template.constants)?,
-                        args,
-                    )
-                    .await?;
-                if new_result.edge >= current_result.edge {
-                    current_result = new_result;
-                }
-                // dbg!(&current_result.params);
-            }
+            refine_strategy_params(template, storage, args, top10_result.clone()).await?;
         }
     }
 
+    Ok(())
+}
+
+async fn refine_from_seeds(
+    templates: &[TemplateFromFile],
+    storage: &mut StrategyStorage,
+    args: &Args,
+) -> Result<()> {
+    let seeds: Vec<OptimizerSeed> =
+        serde_json::from_str(SEED_RESULTS).context("Failed to read optimizer seeds")?;
+    for seed in seeds {
+        let template = templates
+            .iter()
+            .find(|template| template.template_name() == seed.template_name);
+        let seed_template;
+        let template = match template {
+            Some(template) => template,
+            None => {
+                let path = REPO
+                    .join("contracts/src/templates")
+                    .join(format!("{}.sol", seed.template_name));
+                seed_template = TemplateFromFile::parse_file(&path).with_context(|| {
+                    format!("Failed to load template for seed {}", seed.result_id)
+                })?;
+                &seed_template
+            }
+        };
+        let params = seed.strategy_params(template)?;
+        let result = template
+            .run_with_params(&params, args.simulations, &args.sol_dir)
+            .with_context(|| format!("Failed to evaluate seed {}", seed.result_id))?;
+        println!(
+            "Seed {} ({}) edge {:.2}, recorded {:.2}",
+            seed.result_id, seed.template_name, result.edge, seed.recorded_edge
+        );
+        refine_strategy_params(template, storage, args, result).await?;
+    }
+    Ok(())
+}
+
+async fn refine_strategy_params(
+    template: &TemplateFromFile,
+    storage: &mut StrategyStorage,
+    args: &Args,
+    mut current_result: StrategyResult,
+) -> Result<()> {
+    for _ in 0..1000 {
+        let params = current_result.params.vary_one(&template.constants)?;
+        let new_result = template.run_dedup(storage, &params, args).await?;
+        if new_result.edge >= current_result.edge {
+            current_result = new_result;
+        }
+    }
     Ok(())
 }
 
@@ -305,6 +374,32 @@ pub static REPO: LazyLock<PathBuf> = LazyLock::new(|| {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn committed_seeds_can_be_refined() -> Result<()> {
+        let seeds: Vec<OptimizerSeed> = serde_json::from_str(SEED_RESULTS)?;
+        assert_eq!(seeds.len(), 20);
+        assert!(seeds.windows(2).all(|pair| {
+            pair[0].recorded_edge > pair[1].recorded_edge
+                || (pair[0].recorded_edge == pair[1].recorded_edge
+                    && pair[0].result_id < pair[1].result_id)
+        }));
+        for seed in seeds {
+            let path = REPO
+                .join("contracts/src/templates")
+                .join(format!("{}.sol", seed.template_name));
+            let template = TemplateFromFile::parse_file(&path)?;
+            let params = seed.strategy_params(&template)?;
+            for name in seed.params.keys() {
+                let constant = &params.values[name];
+                let value = constant.generated_value.context("Missing value")?;
+                let range = constant.range.as_ref().context("Missing range")?;
+                assert!((range.min..=range.max).contains(&value), "{name}: {value}");
+            }
+            params.vary_one(&template.constants)?;
+        }
+        Ok(())
+    }
 
     #[tokio::test]
     #[ignore = "utility test"]

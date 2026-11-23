@@ -1,0 +1,242 @@
+[
+  {
+    "params": {
+      "ALPHA_SPOT": "2300000000000000",
+      "BASE_FEE": "3200000000000000",
+      "DECAY_COOLDOWN": "92400000000000000",
+      "DECAY_FAST": "1016000000000000000",
+      "DECAY_SLOW": "674900000000000000"
+    },
+    "recorded_edge": 432.36,
+    "result_id": 632,
+    "template_name": "BoostDecay"
+  },
+  {
+    "params": {
+      "ALPHA_SPOT": "3600000000000000",
+      "BASE_FEE": "3600000000000000",
+      "DECAY_COOLDOWN": "113000000000000000",
+      "DECAY_FAST": "1003400000000000000",
+      "DECAY_SLOW": "519800000000000000"
+    },
+    "recorded_edge": 432.34,
+    "result_id": 743,
+    "template_name": "BoostDecay"
+  },
+  {
+    "params": {
+      "ALPHA_SPOT": "7600000000000000",
+      "BASE_FEE": "2600000000000000",
+      "DECAY_COOLDOWN": "253100000000000000",
+      "DECAY_FAST": "1031900000000000000",
+      "DECAY_SLOW": "715400000000000000"
+    },
+    "recorded_edge": 432.23,
+    "result_id": 820,
+    "template_name": "BoostDecay"
+  },
+  {
+    "params": {
+      "ALPHA_SPOT": "3300000000000000",
+      "BASE_FEE": "3700000000000000",
+      "DECAY_COOLDOWN": "81800000000000000",
+      "DECAY_FAST": "992400000000000000",
+      "DECAY_SLOW": "566400000000000000"
+    },
+    "recorded_edge": 431.6,
+    "result_id": 706,
+    "template_name": "BoostDecay"
+  },
+  {
+    "params": {
+      "ALPHA_SPOT": "5100000000000000",
+      "BASE_FEE": "3200000000000000",
+      "DECAY_COOLDOWN": "759100000000000000",
+      "DECAY_FAST": "1027300000000000000",
+      "DECAY_SLOW": "212600000000000000"
+    },
+    "recorded_edge": 431.5,
+    "result_id": 863,
+    "template_name": "BoostDecay"
+  },
+  {
+    "params": {
+      "ALPHA_SPOT": "9400000000000000",
+      "BASE_FEE": "2700000000000000",
+      "DECAY_COOLDOWN": "543400000000000000",
+      "DECAY_FAST": "1015700000000000000",
+      "DECAY_SLOW": "830200000000000000"
+    },
+    "recorded_edge": 431.15,
+    "result_id": 868,
+    "template_name": "BoostDecay"
+  },
+  {
+    "params": {
+      "ALPHA_SPOT": "1700000000000000",
+      "BASE_FEE": "3900000000000000",
+      "DECAY_COOLDOWN": "984700000000000000",
+      "DECAY_FAST": "593900000000000000",
+      "DECAY_SLOW": "313800000000000000"
+    },
+    "recorded_edge": 431.12,
+    "result_id": 156,
+    "template_name": "BoostDecay"
+  },
+  {
+    "params": {
+      "ALPHA_SPOT": "300000000000000",
+      "BASE_FEE": "3400000000000000",
+      "DECAY_COOLDOWN": "656400000000000000",
+      "DECAY_FAST": "1033500000000000000",
+      "DECAY_SLOW": "87100000000000000"
+    },
+    "recorded_edge": 431.12,
+    "result_id": 1441,
+    "template_name": "BoostDecay"
+  },
+  {
+    "params": {
+      "ALPHA_SPOT": "7900000000000000",
+      "BASE_FEE": "1100000000000000",
+      "DECAY_COOLDOWN": "184300000000000000",
+      "DECAY_FAST": "1042100000000000000",
+      "DECAY_SLOW": "708100000000000000"
+    },
+    "recorded_edge": 431.06,
+    "result_id": 1647,
+    "template_name": "BoostDecay"
+  },
+  {
+    "params": {
+      "ALPHA_SPOT": "9600000000000000",
+      "BASE_FEE": "800000000000000",
+      "DECAY_COOLDOWN": "446300000000000000",
+      "DECAY_FAST": "1036100000000000000",
+      "DECAY_SLOW": "276300000000000000"
+    },
+    "recorded_edge": 430.8,
+    "result_id": 1404,
+    "template_name": "BoostDecay"
+  },
+  {
+    "params": {
+      "ALPHA_SPOT": "3300000000000000",
+      "BASE_FEE": "3200000000000000",
+      "DECAY_COOLDOWN": "999400000000000000",
+      "DECAY_FAST": "919800000000000000",
+      "DECAY_SLOW": "351800000000000000"
+    },
+    "recorded_edge": 430.56,
+    "result_id": 1052,
+    "template_name": "BoostDecay"
+  },
+  {
+    "params": {
+      "ALPHA_SPOT": "6500000000000000",
+      "BASE_FEE": "3200000000000000",
+      "DECAY_COOLDOWN": "1016900000000000000",
+      "DECAY_FAST": "423000000000000000",
+      "DECAY_SLOW": "922200000000000000"
+    },
+    "recorded_edge": 430.39,
+    "result_id": 274,
+    "template_name": "BoostDecay"
+  },
+  {
+    "params": {
+      "ALPHA_SPOT": "7700000000000000",
+      "BASE_FEE": "3900000000000000",
+      "DECAY_COOLDOWN": "1047500000000000000",
+      "DECAY_FAST": "349700000000000000",
+      "DECAY_SLOW": "476500000000000000"
+    },
+    "recorded_edge": 430.31,
+    "result_id": 383,
+    "template_name": "BoostDecay"
+  },
+  {
+    "params": {
+      "ALPHA_SPOT": "5000000000000000",
+      "BASE_FEE": "0",
+      "DECAY_COOLDOWN": "424400000000000000",
+      "DECAY_FAST": "1042200000000000000",
+      "DECAY_SLOW": "637000000000000000"
+    },
+    "recorded_edge": 430.22,
+    "result_id": 798,
+    "template_name": "BoostDecay"
+  },
+  {
+    "params": {
+      "ALPHA_SPOT": "9600000000000000",
+      "BASE_FEE": "3700000000000000",
+      "DECAY_COOLDOWN": "1049900000000000000",
+      "DECAY_FAST": "377400000000000000",
+      "DECAY_SLOW": "775700000000000000"
+    },
+    "recorded_edge": 430.21,
+    "result_id": 809,
+    "template_name": "BoostDecay"
+  },
+  {
+    "params": {
+      "ALPHA_SPOT": "7800000000000000",
+      "BASE_FEE": "900000000000000",
+      "DECAY_COOLDOWN": "693300000000000000",
+      "DECAY_FAST": "1038200000000000000",
+      "DECAY_SLOW": "494000000000000000"
+    },
+    "recorded_edge": 430.14,
+    "result_id": 1375,
+    "template_name": "BoostDecay"
+  },
+  {
+    "params": {
+      "ALPHA_SPOT": "8800000000000000",
+      "BASE_FEE": "3100000000000000",
+      "DECAY_COOLDOWN": "1025800000000000000",
+      "DECAY_FAST": "975000000000000000",
+      "DECAY_SLOW": "38400000000000000"
+    },
+    "recorded_edge": 430.08,
+    "result_id": 458,
+    "template_name": "BoostDecay"
+  },
+  {
+    "params": {
+      "ALPHA_SPOT": "1800000000000000",
+      "BASE_FEE": "3900000000000000",
+      "DECAY_COOLDOWN": "594800000000000000",
+      "DECAY_FAST": "917000000000000000",
+      "DECAY_SLOW": "217800000000000000"
+    },
+    "recorded_edge": 429.94,
+    "result_id": 112,
+    "template_name": "BoostDecay"
+  },
+  {
+    "params": {
+      "ALPHA_SPOT": "3300000000000000",
+      "BASE_FEE": "3500000000000000",
+      "DECAY_COOLDOWN": "973900000000000000",
+      "DECAY_FAST": "522800000000000000",
+      "DECAY_SLOW": "268200000000000000"
+    },
+    "recorded_edge": 429.69,
+    "result_id": 1204,
+    "template_name": "BoostDecay"
+  },
+  {
+    "params": {
+      "ALPHA_SPOT": "2400000000000000",
+      "BASE_FEE": "2300000000000000",
+      "DECAY_COOLDOWN": "979300000000000000",
+      "DECAY_FAST": "1007600000000000000",
+      "DECAY_SLOW": "374200000000000000"
+    },
+    "recorded_edge": 429.62,
+    "result_id": 1289,
+    "template_name": "BoostDecay"
+  }
+]

@@ -7,16 +7,16 @@ import {IAMMStrategy, TradeInfo} from "../IAMMStrategy.sol";
 /// @title BoostOnShockThenDecay
 /// @notice Preserve calmer resting fees, but charge more aggressively during real shocks.
 contract Strategy is AMMStrategyBase {
-    /// @notice Base fee (20-40 bps = 0.2-0.4%)
-    uint256 internal constant BASE_FEE = 69 * BPS; // range(2e13 - 4e13 by 1e12)
-    /// @notice Fast decay (10-20000 bps = 0.1-200%)
-    uint256 internal constant DECAY_FAST = 8500 * BPS; // range(1e13 - 2e16 by 1e13)
-    /// @notice Slow decay (100-20000 bps = 1-200%)
-    uint256 internal constant DECAY_SLOW = 9200 * BPS; // range(1e14 - 2e16 by 1e14)
-    /// @notice Decay cooldown (1000-20000 bps = 10-200%)
-    uint256 internal constant DECAY_COOLDOWN = 9000 * BPS; // range(1e15 - 2e16 by 1e14)
-    /// @notice Spot price smoothing factor (1-100 bps = 0.01-1%)
-    uint256 internal constant ALPHA_SPOT = 12 * BPS; // range(1e12 - 1e14 by 1e12)
+    /// @notice Base fee (0-40 bps)
+    uint256 internal constant BASE_FEE = 69 * BPS; // range(0 - 4e15 by 1e14)
+    /// @notice Fast decay (0-20000 bps)
+    uint256 internal constant DECAY_FAST = 8500 * BPS; // range(0 - 2e18 by 1e15)
+    /// @notice Slow decay (0-20000 bps)
+    uint256 internal constant DECAY_SLOW = 9200 * BPS; // range(0 - 2e18 by 1e16)
+    /// @notice Decay cooldown (0-20000 bps)
+    uint256 internal constant DECAY_COOLDOWN = 9000 * BPS; // range(0 - 2e18 by 1e16)
+    /// @notice Spot price smoothing factor (0-100 bps)
+    uint256 internal constant ALPHA_SPOT = 12 * BPS; // range(0 - 1e16 by 1e14)
 
     function afterInitialize(
         uint256 initialX,

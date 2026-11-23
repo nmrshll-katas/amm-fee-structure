@@ -58,5 +58,19 @@ I added an optimizer that goes in 2 phases:
 2. refinement: takes the previous best combination (strategy, params), and tries varying parameters slightly to see if they can be improved iteratively (hill-climbing)
 The optimizing code (rust) lives in "./optimizer"
 
+The optimizer starts with the 20 candidates in `optimizer/seeds.json`. It
+re-runs each candidate using the current `--simulations` setting and gives it
+1,000 refinement attempts before continuing with the local results database
+and random exploration. The JSON keeps the original database IDs and edge
+scores so the selection can be traced.
+
+To refresh the seed file from the local database, run this from the repository
+root. The exporter sorts by highest recorded edge and breaks ties by lowest
+database ID.
+
+```sh
+python3 optimizer/export_seeds.py .cache/db.sqlite optimizer/seeds.json
+```
+
 ### Links
 Optimal Fees for Liquidity Provision in Automated Market Makers:https://ar5iv.labs.arxiv.org/html/2508.08152
