@@ -173,8 +173,6 @@ pub struct StrategyResult {
     pub edge: f64,
 }
 
-const SEED_RESULTS: &str = include_str!("../seeds.json");
-
 #[derive(Deserialize)]
 struct OptimizerSeed {
     result_id: i64,
@@ -208,7 +206,11 @@ impl OptimizerSeed {
 }
 
 fn load_seeds() -> Result<Vec<OptimizerSeed>> {
-    serde_json::from_str(SEED_RESULTS).context("Failed to read optimizer seeds")
+    let path = REPO.join("optimizer/seeds.json");
+    let contents = std::fs::read_to_string(&path)
+        .with_context(|| format!("Failed to read seed file {}", path.display()))?;
+    serde_json::from_str(&contents)
+        .with_context(|| format!("Failed to parse seed file {}", path.display()))
 }
 
 fn export_seed_solidity(output_dir: &Path) -> Result<()> {
